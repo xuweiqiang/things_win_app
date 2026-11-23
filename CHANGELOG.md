@@ -2,6 +2,8 @@
 
 ## 3.0.4 - 2026-11-23
 
+- Made the README default to English and added complete Simplified Chinese,
+  Japanese, Korean, and Spanish versions with cross-language navigation.
 - Added the Things-style Upcoming (`计划`) list with every future scheduled
   task ordered by date, including scheduled Anytime and Someday tasks.
 - Restored complete uncursored Task creations from older caches, fixing the
