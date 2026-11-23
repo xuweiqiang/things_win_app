@@ -13,7 +13,7 @@ import pytest
 import app
 from sync_engine import SafeThings
 from tests.test_sync_engine import FakeCloud, make_engine, seed_task
-from things_cloud import ST_ANYTIME, _date_to_ts
+from things_cloud import ST_ANYTIME, ST_SOMEDAY, _date_to_ts
 
 
 @contextmanager
@@ -79,7 +79,7 @@ def test_non_login_api_endpoints(api_engine):
         assert health["ok"] is True
         assert health["unofficial"] is True
         assert health["authenticated"] is True
-        assert health["version"] == "3.0.3"
+        assert health["version"] == "3.0.4"
         assert health["compatibility_version_code"] == app.THINGS_VERSION_CODE
         assert health["compatibility_platform"] == "macOS"
 
@@ -94,6 +94,7 @@ def test_non_login_api_endpoints(api_engine):
         status, stats = request_json(base, "/api/stats")
         assert status == 200
         assert stats["counts"]["all"] == 1
+        assert stats["counts"]["upcoming"] == 0
 
         for path, key in (
             ("/api/tags", "tags"),
@@ -134,6 +135,37 @@ def test_today_api_does_not_include_old_scheduled_dates(api_engine):
 
     assert status == 200
     assert [task["title"] for task in payload["tasks"]] == ["Today only"]
+
+
+def test_upcoming_api_returns_future_tasks_in_date_order(api_engine):
+    _, cloud = api_engine
+    today = date.today()
+    seed_task(
+        cloud,
+        "Later",
+        st=ST_SOMEDAY,
+        sr=_date_to_ts((today + timedelta(days=9)).isoformat()),
+    )
+    seed_task(
+        cloud,
+        "Sooner",
+        st=ST_ANYTIME,
+        sr=_date_to_ts((today + timedelta(days=2)).isoformat()),
+    )
+    seed_task(
+        cloud,
+        "Past",
+        st=ST_ANYTIME,
+        sr=_date_to_ts((today - timedelta(days=2)).isoformat()),
+    )
+
+    with running_server() as base:
+        status, payload = request_json(base, "/api/tasks?list=upcoming")
+        _, stats = request_json(base, "/api/stats")
+
+    assert status == 200
+    assert [task["title"] for task in payload["tasks"]] == ["Sooner", "Later"]
+    assert stats["counts"]["upcoming"] == 2
 
 
 def test_write_api_paths(api_engine):
@@ -226,6 +258,11 @@ def test_index_and_local_assets_are_served(api_engine):
         assert b"Ctrl+T" in body
         assert b"calendar-cell" in body
         assert "日历".encode("utf-8") in body
+        assert "计划".encode("utf-8") in body
+        assert b"function closeTopmostOverlay()" in body
+        assert b"if (isEscape && closeTopmostOverlay())" in body
+        assert b"function focusCreateTitle()" in body
+        assert b"requestAnimationFrame(resolve)" in body
 
         for path in (
             "/static/vue.global.prod.js",

@@ -232,17 +232,36 @@ def _tombstone_target(kind: str, payload: dict) -> str:
 
 
 def _server_confirmed_items(items: list[dict]) -> list[dict]:
-    """Return only history records confirmed by a Things Cloud cursor.
+    """Return history records that are safe to project as Cloud state.
 
-    Older releases appended successfully committed outbox records without a
-    ``server_index``. Those remain useful for diagnosis, but they must not be
-    projected as current server state or used as a write preflight target.
+    Cursor-confirmed records are authoritative. Older releases also cached
+    complete Task creations after a successful commit without attaching the
+    returned cursor; those creations cannot invent an entity from partial data
+    and must remain visible. Sparse uncursored modifications are still hidden
+    because replaying them could resurrect a deleted or truncated task.
     """
-    return [
-        item
-        for item in items
-        if isinstance(item, dict) and item.get("server_index") is not None
-    ]
+    confirmed = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("server_index") is not None:
+            confirmed.append(item)
+            continue
+
+        kind = str(item.get("e") or "")
+        payload = item.get("p")
+        if not kind.startswith("Task") or not isinstance(payload, dict):
+            continue
+        title = payload.get("tt")
+        is_complete_create = (
+            _action_code(item.get("t")) == ACTION_CREATED
+            and isinstance(title, str)
+            and bool(title.strip())
+            and all(key in payload for key in ("st", "ss", "tp"))
+        )
+        if is_complete_create:
+            confirmed.append(item)
+    return confirmed
 
 
 # ============================================================
@@ -1234,7 +1253,7 @@ def filter_tasks(tasks: list[dict], *, only_pending: bool = True,
       - today:    st=1 且 scheduled_date 精确等于今天
       - anytime:  st=1 且没有 scheduled_date
       - someday:  st=2 且没有 scheduled_date
-      - upcoming: st=2 且 scheduled_date 晚于今天
+      - upcoming: scheduled_date 晚于今天的待办，按日期升序
       - trash:    trashed=True
       - all:      不过滤
       - tag_filter: 额外按标签名过滤 (大小写敏感, 精确匹配)
@@ -1311,11 +1330,7 @@ def filter_tasks(tasks: list[dict], *, only_pending: bool = True,
                 if st != 2 or scheduled_date is not None:
                     continue
             elif list_name == "upcoming":
-                if (
-                    st != 2
-                    or scheduled_date is None
-                    or scheduled_date <= today_date
-                ):
+                if scheduled_date is None or scheduled_date <= today_date:
                     continue
             elif list_name == "all_scheduled":
                 pass
@@ -1346,6 +1361,17 @@ def filter_tasks(tasks: list[dict], *, only_pending: bool = True,
                 continue
 
         result.append(t)
+
+    if list_name == "upcoming":
+        # Upcoming is a chronological agenda, so the scheduled day takes
+        # precedence over each task's manual sort index.
+        result.sort(key=lambda t: (
+            _scheduled_date(t) or today_date,
+            t.get("ix") if isinstance(t.get("ix"), (int, float)) else 0,
+            t.get("created_ms") or 0,
+            t.get("uuid") or "",
+        ))
+        return result
 
     # 排序: 对齐官方客户端语义 (v2.5.20)
     # (1) 组内按 ix 升序 — 官方客户端/手机端都按 ix 升序展示, "按日期排序"按钮

@@ -12,7 +12,7 @@ Cloud，使 Windows 与 macOS、iPhone、iPad 上的 Things 共享任务数据�
 - 原生桌面窗口（pywebview + Microsoft Edge WebView2）。
 - 从 Things Cloud 拉取远端修改，Windows 修改也会提交回同一 history。
 - 新建、编辑任务和项目，包括标题、备注、截止日期、标签、项目/区域归属。
-- 收件箱、今天、日历、随时、某天、日志簿、垃圾桶和项目视图。
+- 收件箱、今天、计划、日历、随时、某天、日志簿、垃圾桶和项目视图。
 - 日历月份视图按日程日期和截止日期标记任务，点击日期可查看当天任务。
 - 日历中可直接在选中日期新建任务；详情面板可修改任意日程日期。
 - 按 `Ctrl+T` 可随时打开新建任务窗口，并自动放入“今天”。
@@ -68,7 +68,7 @@ python app.py
 
 ```powershell
 python -m PyInstaller --noconfirm --clean --onefile --windowed `
-  --name ThingsWindows_v3.0.3 `
+  --name ThingsWindows_v3.0.4 `
   --add-data "index.html;." `
   --add-data "vue.global.prod.js;." `
   --add-data "tailwindcss.js;." `
@@ -76,7 +76,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed `
   main_window.py
 ```
 
-产物位于 `dist\ThingsWindows_v3.0.3.exe`。`build/`、`dist/`、日志和运行
+产物位于 `dist\ThingsWindows_v3.0.4.exe`。`build/`、`dist/`、日志和运行
 数据不会提交到 Git。
 
 ## 测试

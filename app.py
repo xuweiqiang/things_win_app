@@ -24,8 +24,8 @@ from things_cloud import (
     filter_tasks,
 )
 
-VERSION = "3.0.3"
-DISPLAY_VERSION = "3.0.3"
+VERSION = "3.0.4"
+DISPLAY_VERSION = "3.0.4"
 APP_NAME = "Things Windows"
 PROJECT_URL = "https://github.com/xuweiqiang/things_win_app"
 DEFAULT_PORT = 55234
@@ -390,6 +390,9 @@ class Handler(BaseHTTPRequestHandler):
                 counts = {
                     "inbox": len(filter_tasks(pending, list_name="inbox")),
                     "today": len(filter_tasks(pending, list_name="today")),
+                    "upcoming": len(
+                        filter_tasks(pending, list_name="upcoming")
+                    ),
                     "projects": len(
                         [
                             task

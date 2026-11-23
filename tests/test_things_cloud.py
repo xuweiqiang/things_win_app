@@ -24,6 +24,7 @@ from things_cloud import (
     ThingsConflictError,
     ThingsClient,
     _rebuild_state,
+    _server_confirmed_items,
     _date_to_ts,
     canonical_legacy_identifier,
     filter_tasks,
@@ -210,9 +211,75 @@ def test_today_uses_exact_scheduled_date_and_other_lists_ignore_stale_sr():
     assert [t["title"] for t in filter_tasks(tasks, list_name="someday")] == [
         "Someday"
     ]
-    assert [t["title"] for t in filter_tasks(tasks, list_name="upcoming")] == [
-        "Future"
+    upcoming = filter_tasks(tasks, list_name="upcoming")
+    assert {t["title"] for t in upcoming} == {"Future", "Anytime future"}
+    assert [t["scheduled_date"] for t in upcoming] == sorted(
+        t["scheduled_date"] for t in upcoming
+    )
+
+
+def test_upcoming_includes_every_future_scheduled_task_in_date_order():
+    today = date.today()
+
+    def task(title, days_ahead, *, st):
+        scheduled = (today + timedelta(days=days_ahead)).isoformat()
+        return {
+            "uuid": new_uuid(),
+            "title": title,
+            "notes": "",
+            "human_status": "pending",
+            "trashed": False,
+            "type": "task",
+            "schedule": "anytime" if st == ST_ANYTIME else "someday",
+            "st_code": st,
+            "scheduled_ms": _date_to_ts(scheduled),
+            "scheduled_date": scheduled,
+            "deadline_ms": None,
+            "deadline_date": "",
+            "created_ms": 1_700_000_000,
+            "ix": 0,
+            "tags": [],
+        }
+
+    tasks = [
+        task("Later someday", 10, st=ST_SOMEDAY),
+        task("Sooner anytime", 2, st=ST_ANYTIME),
+        task("Past", -2, st=ST_ANYTIME),
     ]
+
+    assert [
+        item["title"]
+        for item in filter_tasks(tasks, list_name="upcoming")
+    ] == ["Sooner anytime", "Later someday"]
+
+
+def test_uncursored_complete_creation_is_kept_but_sparse_change_is_hidden():
+    complete_uuid = new_uuid()
+    sparse_uuid = new_uuid()
+    items = [
+        {
+            "uuid": complete_uuid,
+            "e": KIND_TASK7,
+            "t": ACTION_CREATED,
+            "p": {
+                "tt": "串口工具",
+                "st": ST_ANYTIME,
+                "ss": SS_PENDING,
+                "tp": 0,
+                "sr": _date_to_ts(date.today().isoformat()),
+            },
+        },
+        {
+            "uuid": sparse_uuid,
+            "e": KIND_TASK7,
+            "t": ACTION_MODIFIED,
+            "p": {"tt": "Dirty legacy projection", "st": ST_INBOX, "ss": 0},
+        },
+    ]
+
+    confirmed = _server_confirmed_items(items)
+
+    assert [item["uuid"] for item in confirmed] == [complete_uuid]
 
 
 def test_today_falls_back_to_timestamp_when_formatted_date_is_missing():

@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.0.4 - 2026-11-23
+
+- Added the Things-style Upcoming (`计划`) list with every future scheduled
+  task ordered by date, including scheduled Anytime and Someday tasks.
+- Restored complete uncursored Task creations from older caches, fixing the
+  missing `串口工具` item in Today while continuing to hide sparse legacy
+  modifications.
+- Focus the title field reliably whenever the new-task dialog opens.
+- `Esc` now closes the topmost dialog or attachment preview exactly like its
+  close button.
+
 ## 3.0.3 - 2026-11-23
 
 - Rebuilt task state by replaying Cloud history in order, including deletes

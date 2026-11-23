@@ -780,6 +780,7 @@ createApp({
       return [
         { key: 'inbox', label: '收件箱', icon: '▣', count: counts.inbox || 0 },
         { key: 'today', label: '今天', icon: '☀', count: counts.today || 0 },
+        { key: 'upcoming', label: '计划', icon: '▷', count: counts.upcoming || 0 },
         { key: 'calendar', label: '日历', icon: '▦', count: '' },
         { key: 'projects', label: '项目', icon: '▤', count: counts.projects || 0 },
         { key: 'anytime', label: '随时', icon: '◷', count: counts.anytime || 0 },
@@ -806,7 +807,7 @@ createApp({
         return project?.title || '项目';
       }
       return {
-        inbox: '收件箱', today: '今天', calendar: '日历', projects: '项目', anytime: '随时',
+        inbox: '收件箱', today: '今天', upcoming: '计划', calendar: '日历', projects: '项目', anytime: '随时',
         someday: '某天', logbook: '日志簿', all: '全部任务', trash: '垃圾桶',
       }[currentList.value] || '任务';
     });
@@ -815,7 +816,8 @@ createApp({
       if (currentList.value.startsWith('tag:')) return '带此标签的所有未删除任务';
       if (currentList.value.startsWith('project:')) return '项目内任务';
       return {
-        inbox: '尚未安排的想法', today: '安排在今天的任务', calendar: '按日程与截止日期浏览',
+        inbox: '尚未安排的想法', today: '安排在今天的任务', upcoming: '未来已安排的任务',
+        calendar: '按日程与截止日期浏览',
         projects: '所有项目',
         anytime: '随时可以开始', someday: '以后处理', logbook: '已完成与已取消',
         all: '所有待办', trash: '已移入垃圾桶的项目与任务',
@@ -907,6 +909,12 @@ createApp({
       decorated.sort((a, b) => {
         const pinDelta = Number(pinned.value.has(b.uuid)) - Number(pinned.value.has(a.uuid));
         if (pinDelta) return pinDelta;
+        if (currentList.value === 'upcoming') {
+          const dateDelta = String(a.scheduled_date || '').localeCompare(
+            String(b.scheduled_date || '')
+          );
+          if (dateDelta) return dateDelta;
+        }
         const ai = Number.isFinite(Number(a.ix)) ? Number(a.ix) : 0;
         const bi = Number.isFinite(Number(b.ix)) ? Number(b.ix) : 0;
         return ai - bi;
@@ -1183,6 +1191,18 @@ createApp({
         createForm.when = 'anytime';
       }
       showCreate.value = true;
+      focusCreateTitle();
+    }
+
+    async function focusCreateTitle() {
+      await nextTick();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      const input = createTitleInput.value;
+      if (!input) return;
+      input.focus({ preventScroll: true });
+      if (typeof input.setSelectionRange === 'function') {
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
     }
 
     function openTodayTask() {
@@ -1191,7 +1211,32 @@ createApp({
       createForm.when = 'today';
     }
 
+    function closeTopmostOverlay() {
+      if (lightbox.value) {
+        lightbox.value = null;
+        return true;
+      }
+      if (showSync.value) {
+        showSync.value = false;
+        return true;
+      }
+      if (showCreate.value) {
+        showCreate.value = false;
+        return true;
+      }
+      return false;
+    }
+
     function onGlobalKeydown(event) {
+      const isEscape = String(event.key || '') === 'Escape'
+        || event.key === 'Esc'
+        || event.keyCode === 27;
+      if (isEscape && closeTopmostOverlay()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+
       const hasControl = event.ctrlKey || event.getModifierState?.('Control');
       const isT = String(event.key || '').toLowerCase() === 't'
         || event.code === 'KeyT'
@@ -1506,10 +1551,8 @@ createApp({
       searchTimer = setTimeout(fetchTasks, 250);
     });
 
-    watch(showCreate, async (open) => {
-      if (!open) return;
-      await nextTick();
-      createTitleInput.value?.focus();
+    watch(showCreate, (open) => {
+      if (open) focusCreateTitle();
     });
 
     onMounted(() => {

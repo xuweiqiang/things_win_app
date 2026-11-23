@@ -146,10 +146,10 @@ def test_wait_for_backend_requires_the_expected_version(monkeypatch):
     monkeypatch.setattr(
         main_window.urllib.request,
         "urlopen",
-        lambda *args, **kwargs: Response({"ok": True, "version": "3.0.3"}),
+        lambda *args, **kwargs: Response({"ok": True, "version": "3.0.4"}),
     )
     assert main_window.wait_for_backend(
-        12345, timeout=0.1, expected_version="3.0.3"
+        12345, timeout=0.1, expected_version="3.0.4"
     )
 
     clock = iter([0.0, 0.0, 1.0])
@@ -161,5 +161,5 @@ def test_wait_for_backend_requires_the_expected_version(monkeypatch):
         lambda *args, **kwargs: Response({"ok": True, "version": "3.0.2"}),
     )
     assert not main_window.wait_for_backend(
-        12345, timeout=0.5, expected_version="3.0.3"
+        12345, timeout=0.5, expected_version="3.0.4"
     )
