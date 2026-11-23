@@ -1,0 +1,17 @@
+﻿# PyInstaller 产物
+build/
+dist/
+*.spec
+
+# 运行时数据
+things_debug.log
+*.tmp
+%APPDATA%/ThingsWindows/credentials.dat
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 发布归档 (大二进制, 不进 Git)
+releases/

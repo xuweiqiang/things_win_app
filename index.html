@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Things Windows · 非官方客户端</title>
+  <script src="/static/tailwindcss.js"></script>
+  <script src="/static/vue.global.prod.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #22252d;
+      --muted: #7c8190;
+      --line: #e8e9ed;
+      --blue: #3379f8;
+      --blue-soft: #edf4ff;
+      --paper: #f6f6f8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--paper);
+      font-family: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, textarea, select { font: inherit; }
+    button { cursor: pointer; }
+    [v-cloak] { display: none; }
+    .glass { background: rgba(255,255,255,.9); backdrop-filter: blur(16px); }
+    .task-row { transition: background .12s ease, transform .12s ease; }
+    .task-row:hover { background: #fafbfc; }
+    .task-row.active { background: var(--blue-soft); }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #eef4ff;
+      color: #2268dc;
+      font-size: 11px;
+      line-height: 18px;
+    }
+    .tag-button.active {
+      color: white;
+      background: var(--blue);
+      border-color: var(--blue);
+    }
+    .check {
+      width: 19px;
+      height: 19px;
+      border: 1.5px solid #c5c8d0;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      color: transparent;
+      background: white;
+      transition: .15s ease;
+    }
+    .check:hover { border-color: var(--blue); color: var(--blue); }
+    .scrollbar { scrollbar-width: thin; scrollbar-color: #cfd2da transparent; }
+    .scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+    .scrollbar::-webkit-scrollbar-thumb { background: #cfd2da; border-radius: 8px; }
+    .fade-enter-active, .fade-leave-active { transition: opacity .16s ease; }
+    .fade-enter-from, .fade-leave-to { opacity: 0; }
+    .field {
+      width: 100%;
+      border: 1px solid #e1e3e8;
+      border-radius: 10px;
+      background: white;
+      padding: 9px 11px;
+      outline: none;
+    }
+    .field:focus { border-color: #8ab5ff; box-shadow: 0 0 0 3px #edf4ff; }
+    .primary {
+      background: var(--blue);
+      color: white;
+      border-radius: 10px;
+      padding: 9px 15px;
+      border: 0;
+      font-weight: 600;
+    }
+    .primary:hover { background: #1e65df; }
+    .secondary {
+      background: white;
+      color: #555b69;
+      border: 1px solid #dfe1e7;
+      border-radius: 10px;
+      padding: 8px 13px;
+    }
+    .secondary:hover { background: #f8f9fa; }
+    .icon-button {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid transparent;
+      color: #767c89;
+    }
+    .icon-button:hover { background: #f0f1f4; color: #30343d; }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      background: rgba(25, 27, 34, .42);
+      backdrop-filter: blur(4px);
+    }
+    .modal-card {
+      width: 100%;
+      max-width: 620px;
+      max-height: 90vh;
+      overflow: auto;
+      background: white;
+      border-radius: 18px;
+      box-shadow: 0 22px 70px rgba(16, 20, 30, .24);
+    }
+    @media (max-width: 980px) {
+      .desktop-detail { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div id="app" v-cloak>
+  <div v-if="!auth" class="min-h-screen flex items-center justify-center p-5"
+       style="background:radial-gradient(circle at 20% 10%,#e8f1ff,transparent 34%),radial-gradient(circle at 90% 90%,#f0ecff,transparent 32%),#f6f6f8">
+    <div class="w-full max-w-[440px] bg-white rounded-[22px] shadow-xl border border-white p-8">
+      <div class="w-12 h-12 rounded-2xl bg-blue-600 text-white flex items-center justify-center text-2xl font-bold shadow-lg shadow-blue-200">✓</div>
+      <h1 class="mt-5 text-2xl font-semibold tracking-tight">Things Windows</h1>
+      <p class="mt-1 text-sm text-gray-400">非官方 Things Cloud 兼容客户端</p>
+
+      <div v-if="remembered.has && !manualLogin" class="mt-7">
+        <div class="rounded-xl border border-gray-200 bg-gray-50 p-4">
+          <div class="text-xs text-gray-400">已记住的账号</div>
+          <div class="mt-1 font-medium">{{ remembered.email }}</div>
+          <input v-if="remembered['2fa']" v-model="loginForm.pin" type="password"
+                 class="field mt-3" placeholder="二次验证 PIN" @keyup.enter="loginRemembered">
+        </div>
+        <button class="primary w-full mt-4" :disabled="loading" @click="loginRemembered">
+          {{ loading ? '连接中…' : '连接 Things Cloud' }}
+        </button>
+        <div class="mt-3 flex justify-between text-xs text-gray-400">
+          <button class="hover:text-gray-700" @click="manualLogin = true">使用其他账号</button>
+          <button class="hover:text-red-500" @click="forgetAccount">忘记此账号</button>
+        </div>
+      </div>
+
+      <form v-else class="mt-7 space-y-4" @submit.prevent="login">
+        <label class="block">
+          <span class="text-xs text-gray-500">Things Cloud 邮箱</span>
+          <input v-model="loginForm.email" type="email" class="field mt-1.5" autocomplete="username" required>
+        </label>
+        <label class="block">
+          <span class="text-xs text-gray-500">Things Cloud 密码</span>
+          <input v-model="loginForm.password" type="password" class="field mt-1.5" autocomplete="current-password" required>
+        </label>
+        <label class="flex items-center gap-2 text-sm text-gray-600">
+          <input v-model="loginForm.remember" type="checkbox" class="accent-blue-600">
+          在此电脑记住账号
+        </label>
+        <div v-if="loginForm.remember" class="grid grid-cols-[1fr_auto] gap-3 items-center">
+          <input v-model="loginForm.pin" type="password" class="field" placeholder="可选：本机二次验证 PIN">
+          <span class="text-[11px] text-gray-400">不填写则直接登录</span>
+        </div>
+        <button type="submit" class="primary w-full" :disabled="loading">
+          {{ loading ? '连接中…' : '连接 Things Cloud' }}
+        </button>
+        <button v-if="remembered.has" type="button" class="w-full text-xs text-gray-400 hover:text-gray-700"
+                @click="manualLogin = false">
+          返回已记住的账号
+        </button>
+      </form>
+
+      <p v-if="loginError" class="mt-3 text-sm text-red-500">{{ loginError }}</p>
+      <p class="mt-6 text-[11px] leading-5 text-gray-400">
+        登录凭证仅发送给 Cultured Code 的 Things Cloud。记住账号时使用 Windows DPAPI
+        加密并绑定当前设备。此项目不是 Cultured Code 官方产品。
+      </p>
+    </div>
+  </div>
+
+  <div v-else class="h-screen flex overflow-hidden">
+    <aside class="w-[244px] shrink-0 bg-[#f0f0f3] border-r border-black/5 flex flex-col">
+      <div class="px-4 pt-4 pb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shadow-sm">✓</div>
+          <div class="min-w-0">
+            <div class="font-semibold text-[15px]">Things Windows</div>
+            <div class="text-[10px] text-gray-400 truncate">非官方 · v{{ health.version || '3.0' }}</div>
+          </div>
+        </div>
+      </div>
+
+      <nav class="px-2 space-y-0.5">
+        <button v-for="item in sidebar" :key="item.key" @click="switchList(item.key)"
+                class="w-full h-9 px-3 rounded-lg flex items-center gap-2.5 text-[13px] text-left"
+                :class="currentList === item.key ? 'bg-white shadow-sm font-medium text-gray-900' : 'text-gray-600 hover:bg-white/60'">
+          <span class="w-5 text-center">{{ item.icon }}</span>
+          <span class="flex-1">{{ item.label }}</span>
+          <span class="text-[11px] text-gray-400">{{ item.count }}</span>
+        </button>
+      </nav>
+
+      <div class="mx-3 my-3 border-t border-black/5"></div>
+      <div class="px-4 flex items-center justify-between">
+        <span class="text-[10px] uppercase tracking-wider text-gray-400">项目</span>
+        <button class="text-gray-400 hover:text-blue-600 text-lg leading-none" title="新建项目" @click="openCreate('project')">＋</button>
+      </div>
+      <div class="px-2 mt-1 overflow-auto scrollbar">
+        <button v-for="project in activeProjects" :key="project.uuid"
+                @click="switchProject(project.uuid)"
+                class="w-full min-h-8 px-3 py-1.5 rounded-lg flex items-center gap-2 text-[12px] text-left"
+                :class="currentList === 'project:' + project.uuid ? 'bg-white shadow-sm text-gray-900' : 'text-gray-600 hover:bg-white/60'">
+          <span class="w-2 h-2 rounded-full bg-purple-400 shrink-0"></span>
+          <span class="truncate flex-1">{{ project.title }}</span>
+          <span v-if="project.area_name" class="text-[9px] text-gray-400 truncate max-w-[52px]">{{ project.area_name }}</span>
+        </button>
+        <div v-if="!activeProjects.length" class="px-3 py-2 text-[11px] text-gray-400">还没有项目</div>
+      </div>
+
+      <div v-if="tags.length" class="px-4 mt-4 flex items-center justify-between">
+        <span class="text-[10px] uppercase tracking-wider text-gray-400">标签</span>
+      </div>
+      <div v-if="tags.length" class="px-2 mt-1 overflow-auto scrollbar max-h-40">
+        <button v-for="tag in tags" :key="tag.tag" @click="switchTag(tag.tag)"
+                class="w-full h-8 px-3 rounded-lg flex items-center gap-2 text-[12px]"
+                :class="currentList === 'tag:' + tag.tag ? 'bg-white shadow-sm text-gray-900' : 'text-gray-500 hover:bg-white/60'">
+          <span class="text-blue-400">#</span>
+          <span class="truncate flex-1 text-left">{{ tag.tag }}</span>
+          <span class="text-[10px] text-gray-400">{{ tag.count }}</span>
+        </button>
+      </div>
+
+      <div class="mt-auto p-3 border-t border-black/5">
+        <button class="w-full rounded-xl p-3 text-left hover:bg-white/70" @click="showSync = true">
+          <div class="flex items-center gap-2 text-xs">
+            <span class="w-2 h-2 rounded-full"
+                  :class="sync.online ? (sync.conflicts ? 'bg-orange-400' : 'bg-green-500') : 'bg-gray-400'"></span>
+            <span class="font-medium">{{ syncLabel }}</span>
+            <span v-if="sync.pending" class="ml-auto text-blue-500">{{ sync.pending }} 待同步</span>
+          </div>
+          <div class="mt-1 text-[10px] text-gray-400 truncate">{{ account.email }}</div>
+        </button>
+        <div class="flex gap-1 mt-1">
+          <button class="icon-button" title="立即同步" @click="flushSync">↻</button>
+          <button class="icon-button" title="退出登录" @click="logout">⎋</button>
+          <a class="icon-button ml-auto" :href="health.project_url" target="_blank" title="GitHub">⌘</a>
+        </div>
+      </div>
+    </aside>
+
+    <main class="flex-1 min-w-0 flex bg-white">
+      <section class="flex-1 min-w-[390px] flex flex-col border-r border-gray-100">
+        <header class="h-[70px] px-6 flex items-center gap-4 border-b border-gray-100">
+          <div class="min-w-0">
+            <h2 class="text-[20px] font-semibold truncate">{{ currentTitle }}</h2>
+            <p class="text-[11px] text-gray-400 mt-0.5 truncate">{{ currentSubtitle }}</p>
+          </div>
+          <div class="ml-auto flex items-center gap-2">
+            <div class="relative hidden xl:block">
+              <span class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300">⌕</span>
+              <input v-model="searchKeyword" class="w-48 h-9 rounded-lg bg-gray-100 pl-8 pr-3 text-xs outline-none focus:ring-2 ring-blue-100"
+                     placeholder="搜索">
+            </div>
+            <button class="icon-button" title="刷新" :disabled="loading" @click="refreshData">↻</button>
+            <button class="primary h-9 text-xs flex items-center gap-1.5" @click="openCreate('task')">
+              <span class="text-base leading-none">＋</span> 新建
+            </button>
+          </div>
+        </header>
+
+        <div class="flex-1 overflow-auto scrollbar">
+          <div v-if="loading" class="p-8 text-center text-sm text-gray-400">正在同步…</div>
+          <div v-else-if="!displayTasks.length" class="h-full flex flex-col items-center justify-center text-gray-400">
+            <div class="text-4xl mb-3">{{ emptyIcon }}</div>
+            <div class="text-sm">{{ emptyText }}</div>
+            <button class="text-xs text-blue-500 mt-3" @click="openCreate(currentList === 'projects' ? 'project' : 'task')">
+              新建一项
+            </button>
+          </div>
+          <div v-else>
+            <button v-for="task in displayTasks" :key="task.uuid"
+                    class="task-row w-full text-left px-6 py-3.5 border-b border-gray-100/80 flex items-start gap-3"
+                    :class="{active: selectedUuid === task.uuid}"
+                    @click="selectTask(task)">
+              <span class="check mt-0.5"
+                    :class="task.human_status === 'completed' ? '!bg-green-500 !border-green-500 !text-white' : ''"
+                    @click.stop="cycleStatus(task)">
+                {{ task.human_status === 'completed' ? '✓' : task.human_status === 'canceled' ? '×' : '' }}
+              </span>
+              <span class="flex-1 min-w-0">
+                <span class="flex items-center gap-2">
+                  <span class="truncate text-[14px]"
+                        :class="task.human_status === 'completed' || task.human_status === 'canceled' ? 'line-through text-gray-400' : 'text-gray-800'">
+                    {{ task.title }}
+                  </span>
+                  <span v-if="isPinned(task.uuid)" class="text-orange-400 text-[10px]">置顶</span>
+                  <span v-if="task.type === 'project'" class="text-[9px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-500">项目</span>
+                  <span v-if="task.human_status === 'trashed'" class="text-[9px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400">垃圾桶</span>
+                </span>
+                <span class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400">
+                  <span v-if="task.deadline_date" :class="isOverdue(task) ? 'text-red-500' : ''">⚑ {{ task.deadline_date }}</span>
+                  <span v-if="task.scheduled_date && currentList !== 'today'">◷ {{ task.scheduled_date }}</span>
+                  <span v-if="task.project_name">▣ {{ task.project_name }}</span>
+                  <span v-else-if="task.area_name">◫ {{ task.area_name }}</span>
+                  <span v-if="task.notes" class="truncate max-w-[240px]">◦ {{ notePreview(task.notes) }}</span>
+                  <span v-for="tag in (task.tags || []).slice(0, 4)" :key="tag" class="tag">{{ tag }}</span>
+                </span>
+              </span>
+            </button>
+          </div>
+        </div>
+        <footer class="h-9 px-5 border-t border-gray-100 flex items-center justify-between text-[10px] text-gray-400">
+          <span>{{ displayTasks.length }} 项</span>
+          <span>非官方客户端 · 数据经 Things Cloud 同步</span>
+        </footer>
+      </section>
+
+      <section class="desktop-detail w-[390px] shrink-0 bg-[#fcfcfd] flex flex-col">
+        <div v-if="!selectedTask" class="h-full flex flex-col items-center justify-center text-center px-10 text-gray-400">
+          <div class="w-14 h-14 rounded-2xl bg-gray-100 flex items-center justify-center text-2xl mb-4">✓</div>
+          <div class="text-sm font-medium text-gray-500">选择一项查看详情</div>
+          <p class="mt-2 text-[11px] leading-5">截止日期、标签、备注、项目和区域关系都会同步到 Things Cloud。</p>
+        </div>
+        <template v-else>
+          <header class="h-[70px] px-5 border-b border-gray-100 flex items-center justify-between">
+            <span class="text-xs text-gray-400">{{ selectedTask.type === 'project' ? '项目' : '任务详情' }}</span>
+            <div class="flex gap-1">
+              <button class="icon-button" :class="isPinned(selectedTask.uuid) ? 'text-orange-400' : ''"
+                      title="置顶" @click="togglePin(selectedTask.uuid)">{{ isPinned(selectedTask.uuid) ? '★' : '☆' }}</button>
+              <button class="icon-button" title="关闭" @click="clearSelection">✕</button>
+            </div>
+          </header>
+          <div class="flex-1 overflow-auto scrollbar p-5 space-y-5">
+            <textarea v-model="detail.title" rows="2"
+                      class="w-full resize-none bg-transparent text-[20px] font-semibold leading-7 outline-none"
+                      @blur="saveDetail"></textarea>
+
+            <div class="grid grid-cols-2 gap-2">
+              <button v-for="option in scheduleOptions" :key="option.value"
+                      class="secondary text-[11px] py-2 px-2"
+                      :class="scheduleMatches(option.value) ? '!border-blue-300 !bg-blue-50 !text-blue-700' : ''"
+                      @click="moveSchedule(option.value)">{{ option.label }}</button>
+            </div>
+
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5">截止日期</div>
+              <div class="flex gap-2">
+                <input v-model="detail.deadline" type="date" class="field text-sm" @change="saveDeadline">
+                <button v-if="detail.deadline" class="icon-button" title="清除截止日期" @click="clearDeadline">✕</button>
+              </div>
+            </div>
+
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5">标签</div>
+              <div v-if="(selectedTask.tags || []).length" class="flex flex-wrap gap-1 mb-2">
+                <span v-for="tag in selectedTask.tags" :key="tag" class="tag">{{ tag }}</span>
+              </div>
+              <input v-model="detail.tags" class="field text-sm" placeholder="用逗号分隔标签" @blur="saveTags" @keyup.enter="saveTags">
+              <div v-if="tags.length" class="mt-2 flex flex-wrap gap-1">
+                <button v-for="tag in tags" :key="tag.tag" class="tag tag-button"
+                        :class="{active: detailTagList.includes(tag.tag)}"
+                        @click="toggleDetailTag(tag.tag)">{{ tag.tag }}</button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3">
+              <label v-if="selectedTask.type !== 'project'">
+                <span class="text-[10px] uppercase tracking-wider text-gray-400">项目</span>
+                <select class="field text-xs mt-1.5" :value="selectedTask.project_uuids?.[0] || ''"
+                        @change="moveParent('project', $event.target.value)">
+                  <option value="">无项目</option>
+                  <option v-for="project in projectOptions" :key="project.uuid" :value="project.uuid"
+                          :disabled="project.uuid === selectedTask.uuid">{{ project.title }}</option>
+                </select>
+              </label>
+              <label>
+                <span class="text-[10px] uppercase tracking-wider text-gray-400">区域</span>
+                <select class="field text-xs mt-1.5" :value="selectedTask.area_uuids?.[0] || ''"
+                        @change="moveParent('area', $event.target.value)">
+                  <option value="">无区域</option>
+                  <option v-for="area in areas" :key="area.uuid" :value="area.uuid">{{ area.title }}</option>
+                </select>
+              </label>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between mb-1.5">
+                <span class="text-[10px] uppercase tracking-wider text-gray-400">备注</span>
+                <button class="text-[10px] text-gray-400 hover:text-blue-600" @click="$refs.attachment.click()">
+                  + 本地附件
+                </button>
+                <input ref="attachment" class="hidden" type="file" @change="uploadAttachment($event.target.files[0])">
+              </div>
+              <textarea v-model="detail.notes" rows="7" class="field text-sm leading-6 resize-none"
+                        placeholder="写备注…支持 Ctrl+V 粘贴截图" @blur="saveNotes" @paste="onNotePaste"></textarea>
+              <div class="mt-2 text-[10px] text-gray-400">附件仅保存在本机；备注中的标记会同步，文件本身不会上传到 Things Cloud。</div>
+              <div v-if="noteImages.length" class="grid grid-cols-2 gap-2 mt-2">
+                <img v-for="attachment in noteImages" :key="attachment.name" :src="attachmentUrl(attachment.name)"
+                     class="rounded-lg border border-gray-200 object-cover h-24 w-full cursor-pointer"
+                     @click="lightbox = attachmentUrl(attachment.name)" alt="">
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-gray-200 bg-white p-3">
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-gray-400">状态</span>
+                <select class="bg-transparent text-right outline-none"
+                        :value="selectedTask.human_status === 'trashed' ? 'pending' : selectedTask.human_status"
+                        @change="setStatus(selectedTask, $event.target.value)">
+                  <option value="pending">待办</option>
+                  <option value="completed">已完成</option>
+                  <option value="canceled">已取消</option>
+                </select>
+              </div>
+              <div class="flex items-center justify-between text-xs mt-3">
+                <span class="text-gray-400">创建日期</span>
+                <span>{{ selectedTask.created_date || '—' }}</span>
+              </div>
+              <div v-if="selectedTask.completion_date" class="flex items-center justify-between text-xs mt-3">
+                <span class="text-gray-400">完成日期</span>
+                <span>{{ selectedTask.completion_date }}</span>
+              </div>
+            </div>
+          </div>
+          <footer class="p-4 border-t border-gray-100 flex gap-2">
+            <button v-if="selectedTask.trashed" class="secondary flex-1 text-xs" @click="trashTask(selectedTask, false)">
+              从垃圾桶恢复
+            </button>
+            <button v-else class="secondary flex-1 text-xs !text-red-500 !border-red-200 hover:!bg-red-50"
+                    @click="trashTask(selectedTask, true)">
+              移入垃圾桶
+            </button>
+            <button class="secondary text-xs" @click="saveAllDetail">保存</button>
+          </footer>
+        </template>
+      </section>
+    </main>
+  </div>
+
+  <div v-if="showCreate" class="modal-backdrop" @click.self="showCreate = false">
+    <form class="modal-card p-6" @submit.prevent="createItem">
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="text-lg font-semibold">{{ createMode === 'project' ? '新建项目' : '新建任务' }}</h3>
+          <p class="text-[11px] text-gray-400 mt-1">保存后会进入 Things Cloud 同步队列</p>
+        </div>
+        <button type="button" class="icon-button" @click="showCreate = false">✕</button>
+      </div>
+      <div class="mt-5 space-y-4">
+        <input v-model="createForm.title" class="field text-base font-medium" placeholder="标题" autofocus required>
+        <div v-if="createMode === 'task'" class="grid grid-cols-2 gap-3">
+          <label>
+            <span class="text-xs text-gray-500">放入</span>
+            <select v-model="createForm.when" class="field mt-1.5 text-sm">
+              <option value="inbox">收件箱</option>
+              <option value="today">今天</option>
+              <option value="tomorrow">明天</option>
+              <option value="anytime">随时</option>
+              <option value="someday">某天</option>
+              <option value="custom">指定日期</option>
+            </select>
+          </label>
+          <label v-if="createForm.when === 'custom'">
+            <span class="text-xs text-gray-500">日期</span>
+            <input v-model="createForm.customDate" type="date" class="field mt-1.5 text-sm">
+          </label>
+          <label v-else>
+            <span class="text-xs text-gray-500">截止日期</span>
+            <input v-model="createForm.deadline" type="date" class="field mt-1.5 text-sm">
+          </label>
+        </div>
+        <div v-else class="grid grid-cols-2 gap-3">
+          <label>
+            <span class="text-xs text-gray-500">区域</span>
+            <select v-model="createForm.area_uuid" class="field mt-1.5 text-sm">
+              <option value="">无区域</option>
+              <option v-for="area in areas" :key="area.uuid" :value="area.uuid">{{ area.title }}</option>
+            </select>
+          </label>
+          <label>
+            <span class="text-xs text-gray-500">截止日期</span>
+            <input v-model="createForm.deadline" type="date" class="field mt-1.5 text-sm">
+          </label>
+        </div>
+        <div v-if="createMode === 'task'" class="grid grid-cols-2 gap-3">
+          <label>
+            <span class="text-xs text-gray-500">项目</span>
+            <select v-model="createForm.project_uuid" class="field mt-1.5 text-sm" @change="createForm.area_uuid = ''">
+              <option value="">无项目</option>
+              <option v-for="project in projectOptions" :key="project.uuid" :value="project.uuid">{{ project.title }}</option>
+            </select>
+          </label>
+          <label>
+            <span class="text-xs text-gray-500">区域</span>
+            <select v-model="createForm.area_uuid" class="field mt-1.5 text-sm" @change="createForm.project_uuid = ''">
+              <option value="">无区域</option>
+              <option v-for="area in areas" :key="area.uuid" :value="area.uuid">{{ area.title }}</option>
+            </select>
+          </label>
+        </div>
+        <label v-if="createMode === 'task' && createForm.when === 'custom'">
+          <span class="text-xs text-gray-500">截止日期</span>
+          <input v-model="createForm.deadline" type="date" class="field mt-1.5 text-sm">
+        </label>
+        <div>
+          <span class="text-xs text-gray-500">标签</span>
+          <input v-model="createForm.tags" class="field mt-1.5 text-sm" placeholder="用逗号分隔；新标签会自动创建">
+          <div v-if="tags.length" class="mt-2 flex flex-wrap gap-1">
+            <button type="button" v-for="tag in tags" :key="tag.tag" class="tag tag-button"
+                    :class="{active: createTagList.includes(tag.tag)}"
+                    @click="toggleCreateTag(tag.tag)">{{ tag.tag }}</button>
+          </div>
+        </div>
+        <textarea v-model="createForm.notes" rows="4" class="field text-sm resize-none" placeholder="备注"></textarea>
+      </div>
+      <div class="mt-5 flex justify-end gap-2">
+        <button type="button" class="secondary" @click="showCreate = false">取消</button>
+        <button type="submit" class="primary" :disabled="creating">{{ creating ? '保存中…' : '创建' }}</button>
+      </div>
+    </form>
+  </div>
+
+  <div v-if="showSync" class="modal-backdrop" @click.self="showSync = false">
+    <div class="modal-card p-6">
+      <div class="flex items-center justify-between">
+        <div>
+          <h3 class="text-lg font-semibold">同步状态</h3>
+          <p class="text-[11px] text-gray-400 mt-1">离线编辑会保存在本机，恢复连接后自动提交</p>
+        </div>
+        <button class="icon-button" @click="showSync = false">✕</button>
+      </div>
+      <div class="grid grid-cols-3 gap-2 mt-5">
+        <div class="rounded-xl bg-gray-50 p-3">
+          <div class="text-[10px] text-gray-400">连接</div>
+          <div class="text-sm font-medium mt-1">{{ sync.online ? '在线' : '离线' }}</div>
+        </div>
+        <div class="rounded-xl bg-gray-50 p-3">
+          <div class="text-[10px] text-gray-400">待同步</div>
+          <div class="text-sm font-medium mt-1">{{ sync.pending || 0 }}</div>
+        </div>
+        <div class="rounded-xl bg-gray-50 p-3">
+          <div class="text-[10px] text-gray-400">冲突</div>
+          <div class="text-sm font-medium mt-1">{{ conflicts.length }}</div>
+        </div>
+      </div>
+      <div class="mt-3 text-[11px] text-gray-400">
+        最近同步：{{ sync.last_sync_at || '尚未同步' }}
+        <span v-if="sync.last_error" class="block text-red-500 mt-1">{{ sync.last_error }}</span>
+      </div>
+      <div class="mt-5">
+        <div class="text-xs font-medium mb-2">需要处理的冲突</div>
+        <div v-if="!conflicts.length" class="rounded-xl border border-gray-200 p-4 text-xs text-gray-400">
+          没有冲突。
+        </div>
+        <div v-for="conflict in conflicts" :key="conflict.id"
+             class="rounded-xl border border-orange-200 bg-orange-50/60 p-3 mb-2">
+          <div class="text-xs font-medium">{{ conflict.reason }}</div>
+          <div class="text-[10px] text-gray-500 mt-1">
+            任务 {{ conflict.uuid }} · 字段 {{ (conflict.fields || []).join(', ') || '整个条目' }}
+          </div>
+          <div class="flex gap-2 mt-3">
+            <button class="secondary text-[11px] !py-1.5" @click="resolveConflict(conflict.id, true)">保留本机修改并重试</button>
+            <button class="text-[11px] text-gray-400 hover:text-gray-700" @click="resolveConflict(conflict.id, false)">放弃本机修改</button>
+          </div>
+        </div>
+      </div>
+      <div class="mt-5 flex justify-end">
+        <button class="primary text-sm" :disabled="flushing" @click="flushSync">
+          {{ flushing ? '同步中…' : '立即同步' }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="lightbox" class="modal-backdrop z-[70]" @click="lightbox = null">
+    <img :src="lightbox" class="max-w-[92vw] max-h-[88vh] rounded-xl shadow-2xl" alt="">
+  </div>
+
+  <Transition name="fade">
+    <div v-if="toast"
+         class="fixed bottom-5 left-1/2 -translate-x-1/2 z-[80] px-4 py-2.5 rounded-xl shadow-xl text-sm text-white"
+         :class="toast.ok ? 'bg-gray-900' : 'bg-red-600'">
+      {{ toast.message }}
+    </div>
+  </Transition>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted } = Vue;
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  if (!response.ok || data.ok === false) {
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
+function localDate(offset = 0) {
+  const date = new Date();
+  date.setDate(date.getDate() + offset);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+createApp({
+  setup() {
+    const auth = ref(false);
+    const account = reactive({ email: '' });
+    const health = ref({});
+    const loading = ref(false);
+    const creating = ref(false);
+    const flushing = ref(false);
+    const loginForm = reactive({
+      email: '', password: '', remember: true, pin: '', enablePin: false,
+    });
+    const remembered = ref({ has: false, email: null, '2fa': false });
+    const manualLogin = ref(false);
+    const loginError = ref('');
+
+    const currentList = ref('today');
+    const tasks = ref([]);
+    const projects = ref([]);
+    const areas = ref([]);
+    const tags = ref([]);
+    const stats = ref({});
+    const sync = ref({ online: true, pending: 0, conflicts: 0 });
+    const conflicts = ref([]);
+    const selectedUuid = ref(null);
+    const selectedTask = ref(null);
+    const searchKeyword = ref('');
+    const pinned = ref(new Set());
+    const showCreate = ref(false);
+    const createMode = ref('task');
+    const showSync = ref(false);
+    const toast = ref(null);
+    const lightbox = ref(null);
+    let toastTimer = null;
+
+    const emptyCreate = () => ({
+      title: '', when: 'inbox', customDate: '', deadline: '', tags: '',
+      notes: '', project_uuid: '', area_uuid: '',
+    });
+    const createForm = reactive(emptyCreate());
+    const detail = reactive({ title: '', notes: '', deadline: '', tags: '' });
+
+    const notify = (message, ok = true) => {
+      clearTimeout(toastTimer);
+      toast.value = { message, ok };
+      toastTimer = setTimeout(() => { toast.value = null; }, 2600);
+    };
+
+    const sidebar = computed(() => {
+      const counts = stats.value || {};
+      return [
+        { key: 'inbox', label: '收件箱', icon: '▣', count: counts.inbox || 0 },
+        { key: 'today', label: '今天', icon: '☀', count: counts.today || 0 },
+        { key: 'projects', label: '项目', icon: '▤', count: counts.projects || 0 },
+        { key: 'anytime', label: '随时', icon: '◷', count: counts.anytime || 0 },
+        { key: 'someday', label: '某天', icon: '◇', count: counts.someday || 0 },
+        { key: 'logbook', label: '日志簿', icon: '▥', count: counts.logbook || 0 },
+        { key: 'all', label: '全部任务', icon: '≡', count: counts.all || 0 },
+        { key: 'trash', label: '垃圾桶', icon: '⌫', count: counts.trash || 0 },
+      ];
+    });
+
+    const activeProjects = computed(() =>
+      projects.value
+        .filter((project) => !project.trashed && project.human_status === 'pending')
+        .sort((a, b) => String(a.title).localeCompare(String(b.title), 'zh-CN'))
+    );
+    const projectOptions = computed(() =>
+      projects.value.filter((project) => !project.trashed)
+    );
+
+    const currentTitle = computed(() => {
+      if (currentList.value.startsWith('tag:')) return `# ${currentList.value.slice(4)}`;
+      if (currentList.value.startsWith('project:')) {
+        const project = projects.value.find((item) => item.uuid === currentList.value.slice(8));
+        return project?.title || '项目';
+      }
+      return {
+        inbox: '收件箱', today: '今天', projects: '项目', anytime: '随时',
+        someday: '某天', logbook: '日志簿', all: '全部任务', trash: '垃圾桶',
+      }[currentList.value] || '任务';
+    });
+
+    const currentSubtitle = computed(() => {
+      if (currentList.value.startsWith('tag:')) return '带此标签的所有未删除任务';
+      if (currentList.value.startsWith('project:')) return '项目内任务';
+      return {
+        inbox: '尚未安排的想法', today: '今天和逾期任务', projects: '所有项目',
+        anytime: '随时可以开始', someday: '以后处理', logbook: '已完成与已取消',
+        all: '所有待办', trash: '已移入垃圾桶的项目与任务',
+      }[currentList.value] || '';
+    });
+
+    const displayTasks = computed(() => {
+      const word = searchKeyword.value.trim().toLocaleLowerCase();
+      let source = tasks.value;
+      if (word && !['today', 'inbox', 'anytime', 'someday', 'trash', 'logbook'].includes(currentList.value)) {
+        source = source.filter((task) =>
+          `${task.title || ''} ${task.notes || ''} ${(task.tags || []).join(' ')}`
+            .toLocaleLowerCase().includes(word)
+        );
+      }
+      const decorated = [...source];
+      decorated.sort((a, b) => {
+        const pinDelta = Number(pinned.value.has(b.uuid)) - Number(pinned.value.has(a.uuid));
+        if (pinDelta) return pinDelta;
+        const ai = Number.isFinite(Number(a.ix)) ? Number(a.ix) : 0;
+        const bi = Number.isFinite(Number(b.ix)) ? Number(b.ix) : 0;
+        return ai - bi;
+      });
+      return decorated;
+    });
+
+    const emptyText = computed(() => currentList.value === 'trash' ? '垃圾桶是空的' : '这里还没有内容');
+    const emptyIcon = computed(() => currentList.value === 'trash' ? '⌫' : '✓');
+    const syncLabel = computed(() => {
+      if (!sync.value.online) return '离线 · 本地可用';
+      if (conflicts.value.length) return '需要处理冲突';
+      if (sync.value.pending) return '等待同步';
+      return '已同步';
+    });
+    const createTagList = computed(() =>
+      createForm.tags.split(/[,，]/).map((value) => value.trim()).filter(Boolean)
+    );
+    const detailTagList = computed(() =>
+      detail.tags.split(/[,，]/).map((value) => value.trim()).filter(Boolean)
+    );
+    const noteImages = computed(() => {
+      const result = [];
+      const text = selectedTask.value?.notes || '';
+      const matcher = /\[(图片|附件):([^\[\]]+)\]/g;
+      let match;
+      while ((match = matcher.exec(text)) !== null) {
+        if (match[1] === '图片') result.push({ name: match[2].trim() });
+      }
+      return result;
+    });
+
+    function syncSelectedFromList() {
+      if (!selectedUuid.value) {
+        selectedTask.value = null;
+        return;
+      }
+      const all = [...tasks.value, ...projects.value];
+      const fresh = all.find((task) => task.uuid === selectedUuid.value);
+      selectedTask.value = fresh ? { ...fresh } : selectedTask.value;
+      if (selectedTask.value) loadDetail(selectedTask.value);
+    }
+
+    async function fetchStats() {
+      try {
+        const data = await api('/api/stats');
+        stats.value = data.counts || {};
+      } catch (error) {
+        if (!String(error.message).includes('尚未连接')) loginError.value = error.message;
+      }
+    }
+
+    async function fetchProjects() {
+      const data = await api('/api/projects');
+      projects.value = data.projects || [];
+    }
+
+    async function fetchAreas() {
+      const data = await api('/api/areas');
+      areas.value = data.areas || [];
+    }
+
+    async function fetchTags() {
+      const data = await api('/api/tags');
+      tags.value = data.tags || [];
+    }
+
+    async function fetchSync() {
+      const data = await api('/api/sync/status');
+      sync.value = data;
+      const conflictData = await api('/api/conflicts');
+      conflicts.value = conflictData.conflicts || [];
+    }
+
+    async function fetchTasks(showSpinner = true) {
+      if (showSpinner) loading.value = true;
+      try {
+        let data;
+        if (currentList.value === 'projects') {
+          data = await api('/api/projects');
+          tasks.value = data.projects || [];
+        } else if (currentList.value === 'logbook') {
+          data = await api('/api/completed');
+          tasks.value = data.tasks || [];
+        } else if (currentList.value.startsWith('project:')) {
+          const projectUuid = currentList.value.slice(8);
+          data = await api('/api/tasks/all');
+          tasks.value = (data.tasks || []).filter((task) =>
+            !task.trashed &&
+            task.human_status === 'pending' &&
+            (task.project_uuids || []).includes(projectUuid)
+          );
+        } else if (currentList.value.startsWith('tag:')) {
+          data = await api(`/api/tasks?tag=${encodeURIComponent(currentList.value.slice(4))}`);
+          tasks.value = data.tasks || [];
+        } else if (currentList.value === 'all') {
+          data = await api('/api/tasks/all');
+          tasks.value = (data.tasks || []).filter((task) =>
+            !task.trashed && task.human_status === 'pending'
+          );
+        } else {
+          const query = searchKeyword.value.trim();
+          data = await api(`/api/tasks?list=${encodeURIComponent(currentList.value)}${query ? '&q=' + encodeURIComponent(query) : ''}`);
+          tasks.value = data.tasks || [];
+        }
+        syncSelectedFromList();
+      } catch (error) {
+        notify(error.message, false);
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function refreshData() {
+      loading.value = true;
+      try {
+        await Promise.all([
+          fetchProjects(), fetchAreas(), fetchTags(), fetchSync(), fetchStats(),
+        ]);
+        await fetchTasks(false);
+      } catch (error) {
+        notify(error.message, false);
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function bootstrap() {
+      try {
+        health.value = await api('/api/health');
+        remembered.value = await api('/api/remembered');
+        const pins = await api('/api/pins');
+        pinned.value = new Set(pins.pinned || []);
+        if (health.value.authenticated) {
+          auth.value = true;
+          const user = await api('/api/account');
+          account.email = user.email;
+          await refreshData();
+        }
+      } catch (error) {
+        loginError.value = error.message;
+      }
+    }
+
+    async function login() {
+      loginError.value = '';
+      loading.value = true;
+      try {
+        const data = await api('/api/auth', {
+          method: 'POST',
+          body: JSON.stringify(loginForm),
+        });
+        account.email = data.email;
+        auth.value = true;
+        await refreshData();
+      } catch (error) {
+        loginError.value = error.message;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function loginRemembered() {
+      loginError.value = '';
+      loading.value = true;
+      try {
+        const data = await api('/api/auth-2fa', {
+          method: 'POST',
+          body: JSON.stringify({ pin: loginForm.pin }),
+        });
+        account.email = data.email;
+        auth.value = true;
+        loginForm.pin = '';
+        await refreshData();
+      } catch (error) {
+        loginError.value = error.message;
+      } finally {
+        loading.value = false;
+      }
+    }
+
+    async function forgetAccount() {
+      await api('/api/remove-remembered', { method: 'POST', body: '{}' });
+      remembered.value = { has: false, email: null, '2fa': false };
+      manualLogin.value = true;
+    }
+
+    async function logout() {
+      await api('/api/logout', { method: 'POST', body: '{}' });
+      auth.value = false;
+      tasks.value = [];
+      projects.value = [];
+      selectedTask.value = null;
+    }
+
+    function clearSelection() {
+      selectedUuid.value = null;
+      selectedTask.value = null;
+    }
+
+    function switchList(name) {
+      currentList.value = name;
+      clearSelection();
+      fetchTasks();
+    }
+
+    function switchProject(uuid) {
+      currentList.value = `project:${uuid}`;
+      clearSelection();
+      fetchTasks();
+    }
+
+    function switchTag(name) {
+      currentList.value = `tag:${name}`;
+      clearSelection();
+      fetchTasks();
+    }
+
+    function loadDetail(task) {
+      detail.title = task.title || '';
+      detail.notes = task.notes || '';
+      detail.deadline = task.deadline_date || '';
+      detail.tags = (task.tags || []).join(', ');
+    }
+
+    function selectTask(task) {
+      selectedUuid.value = task.uuid;
+      selectedTask.value = { ...task };
+      loadDetail(task);
+    }
+
+    function openCreate(mode) {
+      createMode.value = mode;
+      Object.assign(createForm, emptyCreate());
+      if (currentList.value.startsWith('project:')) {
+        createForm.project_uuid = currentList.value.slice(8);
+        createForm.when = 'anytime';
+      }
+      showCreate.value = true;
+    }
+
+    function toggleCreateTag(name) {
+      const list = [...createTagList.value];
+      const index = list.indexOf(name);
+      if (index >= 0) list.splice(index, 1);
+      else list.push(name);
+      createForm.tags = list.join(', ');
+    }
+
+    function toggleDetailTag(name) {
+      const list = [...detailTagList.value];
+      const index = list.indexOf(name);
+      if (index >= 0) list.splice(index, 1);
+      else list.push(name);
+      detail.tags = list.join(', ');
+      saveTags();
+    }
+
+    async function createItem() {
+      if (!createForm.title.trim()) return;
+      creating.value = true;
+      try {
+        let when = createForm.when;
+        if (when === 'custom') {
+          if (!createForm.customDate) throw new Error('请选择日期');
+          when = createForm.customDate;
+        }
+        const body = {
+          title: createForm.title.trim(),
+          notes: createForm.notes,
+          deadline: createForm.deadline || null,
+          tags: createTagList.value,
+        };
+        const path = createMode.value === 'project' ? '/api/projects' : '/api/tasks';
+        if (createMode.value === 'project') {
+          body.area_uuid = createForm.area_uuid || null;
+        } else {
+          body.when = when;
+          body.project_uuid = createForm.project_uuid || null;
+          body.area_uuid = createForm.area_uuid || null;
+        }
+        const data = await api(path, { method: 'POST', body: JSON.stringify(body) });
+        showCreate.value = false;
+        notify(data.sync?.pending ? '已保存到本机，等待同步' : '已创建并同步');
+        await refreshData();
+        selectedUuid.value = data.uuid;
+        syncSelectedFromList();
+      } catch (error) {
+        notify(error.message, false);
+      } finally {
+        creating.value = false;
+      }
+    }
+
+    async function modify(uuid, fields, successMessage = '已更新') {
+      try {
+        const data = await api('/api/tasks/modify', {
+          method: 'POST',
+          body: JSON.stringify({ uuid, fields }),
+        });
+        notify(data.sync?.pending ? '已保存到本机，等待同步' : successMessage);
+        await refreshData();
+        return true;
+      } catch (error) {
+        notify(error.message, false);
+        return false;
+      }
+    }
+
+    async function saveDetail() {
+      if (!selectedTask.value) return;
+      if ((detail.title || '').trim() === (selectedTask.value.title || '')) return;
+      await modify(selectedTask.value.uuid, { tt: detail.title });
+    }
+
+    async function saveNotes() {
+      if (!selectedTask.value) return;
+      if ((detail.notes || '') === (selectedTask.value.notes || '')) return;
+      await modify(selectedTask.value.uuid, { nt: detail.notes });
+    }
+
+    async function saveTags() {
+      if (!selectedTask.value) return;
+      const next = detailTagList.value;
+      const previous = selectedTask.value.tags || [];
+      if (next.join('\u0000') === previous.join('\u0000')) return;
+      await modify(selectedTask.value.uuid, { tg: next });
+    }
+
+    async function saveDeadline() {
+      if (!selectedTask.value) return;
+      const value = detail.deadline || null;
+      if ((selectedTask.value.deadline_date || '') === (value || '')) return;
+      await modify(selectedTask.value.uuid, { dd: value });
+    }
+
+    async function clearDeadline() {
+      detail.deadline = '';
+      await saveDeadline();
+    }
+
+    async function saveAllDetail() {
+      if (!selectedTask.value) return;
+      const fields = {};
+      if ((detail.title || '').trim() !== (selectedTask.value.title || '')) fields.tt = detail.title;
+      if ((detail.notes || '') !== (selectedTask.value.notes || '')) fields.nt = detail.notes;
+      if (detailTagList.value.join('\u0000') !== (selectedTask.value.tags || []).join('\u0000')) fields.tg = detailTagList.value;
+      if ((detail.deadline || '') !== (selectedTask.value.deadline_date || '')) fields.dd = detail.deadline || null;
+      if (!Object.keys(fields).length) {
+        notify('没有需要保存的修改');
+        return;
+      }
+      await modify(selectedTask.value.uuid, fields);
+    }
+
+    const scheduleOptions = [
+      { value: 'inbox', label: '收件箱' },
+      { value: 'today', label: '今天' },
+      { value: 'tomorrow', label: '明天' },
+      { value: 'anytime', label: '随时' },
+      { value: 'someday', label: '某天' },
+    ];
+
+    function scheduleMatches(value) {
+      const task = selectedTask.value;
+      if (!task) return false;
+      const date = task.scheduled_date || '';
+      if (value === 'inbox') return task.st_code === 0;
+      if (value === 'today') return task.st_code !== 0 && date && date <= localDate();
+      if (value === 'tomorrow') return date === localDate(1);
+      if (value === 'anytime') return task.st_code === 1 && !date;
+      if (value === 'someday') return task.st_code === 2 && (!date || date > localDate());
+      return false;
+    }
+
+    async function moveSchedule(target) {
+      if (!selectedTask.value) return;
+      try {
+        await api('/api/tasks/move', {
+          method: 'POST',
+          body: JSON.stringify({ uuid: selectedTask.value.uuid, target }),
+        });
+        notify('日程已更新');
+        await refreshData();
+      } catch (error) {
+        notify(error.message, false);
+      }
+    }
+
+    async function moveParent(kind, value) {
+      if (!selectedTask.value) return;
+      const fields = kind === 'project'
+        ? { project_uuid: value || null, area_uuid: null }
+        : { area_uuid: value || null, project_uuid: null };
+      await modify(selectedTask.value.uuid, fields, '归属已更新');
+    }
+
+    async function setStatus(task, status) {
+      try {
+        await api('/api/tasks/status', {
+          method: 'POST',
+          body: JSON.stringify({ uuid: task.uuid, status }),
+        });
+        notify({ pending: '已恢复为待办', completed: '已完成', canceled: '已取消' }[status]);
+        await refreshData();
+      } catch (error) {
+        notify(error.message, false);
+      }
+    }
+
+    function cycleStatus(task) {
+      setStatus(task, task.human_status === 'completed' ? 'pending' : 'completed');
+    }
+
+    async function trashTask(task, trashed) {
+      try {
+        await api('/api/tasks/trash', {
+          method: 'POST',
+          body: JSON.stringify({ uuid: task.uuid, trashed }),
+        });
+        notify(trashed ? '已移入垃圾桶' : '已从垃圾桶恢复');
+        if (trashed) clearSelection();
+        await refreshData();
+      } catch (error) {
+        notify(error.message, false);
+      }
+    }
+
+    async function flushSync() {
+      flushing.value = true;
+      try {
+        const data = await api('/api/sync/flush', { method: 'POST', body: '{}' });
+        sync.value = data;
+        notify(data.pending ? '仍有待同步项目' : (data.conflicts ? '同步完成，有待处理冲突' : '同步完成'));
+        await refreshData();
+      } catch (error) {
+        notify(error.message, false);
+      } finally {
+        flushing.value = false;
+      }
+    }
+
+    async function resolveConflict(id, retry) {
+      try {
+        await api(`/api/conflicts/${id}/${retry ? 'retry' : 'abandon'}`, {
+          method: 'POST',
+          body: '{}',
+        });
+        notify(retry ? '已重试本机修改' : '已放弃本机修改');
+        await refreshData();
+      } catch (error) {
+        notify(error.message, false);
+      }
+    }
+
+    async function togglePin(uuid) {
+      const next = new Set(pinned.value);
+      if (next.has(uuid)) next.delete(uuid);
+      else next.add(uuid);
+      pinned.value = next;
+      await api('/api/pins', {
+        method: 'POST',
+        body: JSON.stringify({ uuids: [...next] }),
+      });
+    }
+
+    function isPinned(uuid) {
+      return pinned.value.has(uuid);
+    }
+
+    function isOverdue(task) {
+      return !!task.deadline_date && task.deadline_date < localDate() && task.human_status === 'pending';
+    }
+
+    function notePreview(notes) {
+      return String(notes || '').replace(/\[(图片|附件):([^\[\]]+)\]/g, '📎 $2').slice(0, 80);
+    }
+
+    function attachmentUrl(name) {
+      if (!selectedTask.value?.uuid) return '';
+      return `/api/attachments/file?task_uuid=${encodeURIComponent(selectedTask.value.uuid)}&name=${encodeURIComponent(name)}`;
+    }
+
+    async function uploadAttachment(file) {
+      if (!file || !selectedTask.value) return;
+      if (file.size > 20 * 1024 * 1024) {
+        notify('附件超过 20MB', false);
+        return;
+      }
+      try {
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result).split(',')[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const data = await api('/api/attachments', {
+          method: 'POST',
+          body: JSON.stringify({
+            task_uuid: selectedTask.value.uuid,
+            filename: file.name || `截图_${Date.now()}.png`,
+            data_b64: base64,
+          }),
+        });
+        const image = /\.(png|jpe?g|gif|webp|bmp)$/i.test(data.name);
+        const marker = `\n[${image ? '图片' : '附件'}:${data.name}]\n`;
+        detail.notes = (detail.notes || '') + marker;
+        await saveNotes();
+        notify('附件已保存到本机');
+      } catch (error) {
+        notify(`附件保存失败：${error.message}`, false);
+      }
+    }
+
+    function onNotePaste(event) {
+      const items = event.clipboardData?.items || [];
+      for (const item of items) {
+        if (item.type?.startsWith('image/')) {
+          event.preventDefault();
+          const file = item.getAsFile();
+          if (file) uploadAttachment(new File([file], `截图_${Date.now()}.png`, { type: item.type }));
+          return;
+        }
+      }
+    }
+
+    let pollTimer = null;
+    let searchTimer = null;
+    watch(searchKeyword, () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(fetchTasks, 250);
+    });
+
+    onMounted(() => {
+      bootstrap();
+      pollTimer = setInterval(async () => {
+        if (!auth.value) return;
+        try {
+          await fetchSync();
+          await fetchTasks(false);
+          await Promise.all([fetchStats(), fetchProjects(), fetchAreas()]);
+        } catch {
+          // Local cache keeps the window usable while Things Cloud is offline.
+        }
+      }, 15000);
+    });
+
+    onUnmounted(() => {
+      clearInterval(pollTimer);
+      clearTimeout(searchTimer);
+      clearTimeout(toastTimer);
+    });
+
+    return {
+      auth, account, health, loading, creating, flushing,
+      loginForm, remembered, manualLogin, loginError,
+      currentList, tasks, projects, areas, tags, stats, sync, conflicts,
+      selectedUuid, selectedTask, searchKeyword, pinned, showCreate, createMode,
+      showSync, toast, lightbox, createForm, detail,
+      sidebar, activeProjects, projectOptions, currentTitle, currentSubtitle,
+      displayTasks, emptyText, emptyIcon, syncLabel, createTagList, detailTagList,
+      noteImages, scheduleOptions,
+      login, loginRemembered, forgetAccount, logout, refreshData, fetchTasks,
+      switchList, switchProject, switchTag, selectTask, clearSelection,
+      openCreate, createItem, toggleCreateTag, toggleDetailTag,
+      saveDetail, saveNotes, saveTags, saveDeadline, clearDeadline, saveAllDetail,
+      scheduleMatches, moveSchedule, moveParent, setStatus, cycleStatus, trashTask,
+      flushSync, resolveConflict, togglePin, isPinned, isOverdue, notePreview,
+      attachmentUrl, uploadAttachment, onNotePaste,
+    };
+  },
+}).mount('#app');
+</script>
+</body>
+</html>
