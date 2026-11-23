@@ -8,7 +8,14 @@ import pytest
 
 from things_cloud import (
     ACTION_CREATED,
+    ACTION_DELETED,
+    ACTION_MODIFIED,
+    KIND_TAG,
+    KIND_TOMBSTONE,
     KIND_TASK7,
+    SS_CANCELED,
+    SS_COMPLETED,
+    SS_PENDING,
     ST_ANYTIME,
     ST_INBOX,
     ST_SOMEDAY,
@@ -16,7 +23,9 @@ from things_cloud import (
     THINGS_USER_AGENT,
     ThingsConflictError,
     ThingsClient,
+    _rebuild_state,
     _date_to_ts,
+    canonical_legacy_identifier,
     filter_tasks,
     new_uuid,
 )
@@ -233,4 +242,150 @@ def test_today_falls_back_to_timestamp_when_formatted_date_is_missing():
 
     assert [t["title"] for t in filter_tasks(tasks, list_name="today")] == [
         "Today"
+    ]
+
+
+def test_rebuild_replays_delete_tombstone_and_recreate_in_history_order():
+    task_uuid = new_uuid()
+    items = [
+        {
+            "uuid": task_uuid,
+            "e": KIND_TASK7,
+            "t": ACTION_MODIFIED,
+            "p": {"tt": "Ghost"},
+            "server_index": 0,
+        },
+        {
+            "uuid": task_uuid,
+            "e": KIND_TASK7,
+            "t": ACTION_CREATED,
+            "p": {"tt": "First", "st": ST_INBOX, "ss": SS_PENDING, "tp": 0},
+            "server_index": 1,
+        },
+        {
+            "uuid": task_uuid,
+            "e": KIND_TASK7,
+            "t": ACTION_DELETED,
+            "p": {},
+            "server_index": 2,
+        },
+        {
+            "uuid": new_uuid(),
+            "e": KIND_TOMBSTONE,
+            "t": ACTION_CREATED,
+            "p": {"dloid": task_uuid},
+            "server_index": 3,
+        },
+        {
+            "uuid": task_uuid,
+            "e": KIND_TASK7,
+            "t": ACTION_CREATED,
+            "p": {"tt": "Restored", "st": ST_INBOX, "ss": SS_PENDING, "tp": 0},
+            "server_index": 4,
+        },
+    ]
+
+    tasks = _rebuild_state(items)
+
+    assert [task["title"] for task in tasks] == ["Restored"]
+
+
+def test_rebuild_clears_deleted_tags_from_tag_map_and_tasks():
+    tag_uuid = new_uuid()
+    task_uuid = new_uuid()
+    tag_map = {}
+    items = [
+        {
+            "uuid": tag_uuid,
+            "e": KIND_TAG,
+            "t": ACTION_CREATED,
+            "p": {"tt": "old-tag"},
+            "server_index": 0,
+        },
+        {
+            "uuid": task_uuid,
+            "e": KIND_TASK7,
+            "t": ACTION_CREATED,
+            "p": {
+                "tt": "Tagged",
+                "st": ST_INBOX,
+                "ss": SS_PENDING,
+                "tp": 0,
+                "tg": [tag_uuid],
+            },
+            "server_index": 1,
+        },
+        {
+            "uuid": tag_uuid,
+            "e": KIND_TAG,
+            "t": ACTION_DELETED,
+            "p": {},
+            "server_index": 2,
+        },
+    ]
+
+    tasks = _rebuild_state(items, tag_map_out=tag_map)
+
+    assert tag_map == {}
+    assert tasks[0]["tags"] == []
+
+
+def test_smart_lists_hide_recurring_templates_and_inactive_ancestors():
+    today = date.today().isoformat()
+    completed_project = new_uuid()
+    recurring_uuid = new_uuid()
+    hidden_child = new_uuid()
+    items = [
+        {
+            "uuid": completed_project,
+            "e": KIND_TASK7,
+            "t": ACTION_CREATED,
+            "p": {
+                "tt": "Finished project",
+                "tp": 1,
+                "st": ST_INBOX,
+                "ss": SS_COMPLETED,
+            },
+            "server_index": 0,
+        },
+        {
+            "uuid": recurring_uuid,
+            "e": KIND_TASK7,
+            "t": ACTION_CREATED,
+            "p": {
+                "tt": "Weekly template",
+                "tp": 0,
+                "st": ST_INBOX,
+                "ss": SS_PENDING,
+                "rr": {"f": "weekly"},
+                "rp": None,
+                "rt": [],
+            },
+            "server_index": 1,
+        },
+        {
+            "uuid": hidden_child,
+            "e": KIND_TASK7,
+            "t": ACTION_CREATED,
+            "p": {
+                "tt": "Child of finished project",
+                "tp": 0,
+                "st": ST_ANYTIME,
+                "ss": SS_PENDING,
+                "sr": _date_to_ts(today),
+                "pr": [completed_project],
+            },
+            "server_index": 2,
+        },
+    ]
+
+    tasks = _rebuild_state(items)
+
+    assert filter_tasks(tasks, list_name="inbox") == []
+    assert filter_tasks(tasks, list_name="today") == []
+    assert next(task for task in tasks if task["uuid"] == recurring_uuid)[
+        "recurring"
+    ]
+    assert not next(task for task in tasks if task["uuid"] == hidden_child)[
+        "ancestors_available"
     ]

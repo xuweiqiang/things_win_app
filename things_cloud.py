@@ -7,6 +7,7 @@ Things Cloud API — Python 跨平台客户端
 """
 
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -96,9 +97,15 @@ KIND_TAG = "Tag4"
 KIND_CHECKLIST = "ChecklistItem3"
 KIND_TOMBSTONE = "Tombstone2"
 
+LEGACY_TASK_KINDS = frozenset({"Task", "Task3", "Task4"})
+AREA_KINDS = frozenset({"Area", "Area2", KIND_AREA})
+TAG_KINDS = frozenset({"Tag", "Tag3", KIND_TAG})
+TOMBSTONE_KINDS = frozenset({"Tombstone", KIND_TOMBSTONE})
+
 # Action (t)
 ACTION_CREATED = 0
 ACTION_MODIFIED = 1
+ACTION_DELETED = 2
 
 
 # ============================================================
@@ -164,6 +171,78 @@ def validate_uuid(s: str) -> bool:
         return len(raw) == 16
     except Exception:
         return False
+
+
+def encode_legacy_identifier(legacy_id: str) -> str:
+    """Derive the current Base58 ID used after Things migrated old UUIDs.
+
+    Things Cloud has no history mapping between the old and current IDs.
+    The mapping is byte-exact: ``Base58(SHA1(legacy_id)[:16])``. Recurring
+    instances with a ``-YYYYMMDD`` suffix hash the UUID prefix once, append
+    the date suffix to that raw digest, and then hash the combined bytes.
+    """
+    if not legacy_id:
+        return ""
+    value = str(legacy_id)
+    source = value.encode("utf-8")
+    if len(value) == 45 and value[36] == "-" and value[37:].isdigit():
+        try:
+            uuid_mod.UUID(value[:36])
+        except (ValueError, AttributeError):
+            pass
+        else:
+            prefix_digest = hashlib.sha1(value[:36].encode("utf-8")).digest()[:16]
+            source = prefix_digest + value[36:].encode("ascii")
+    return _b58encode(hashlib.sha1(source).digest()[:16])
+
+
+def canonical_legacy_identifier(value: str) -> str:
+    """Return a current ID without re-hashing canonical Base58 IDs."""
+    if not isinstance(value, str) or not value:
+        return value
+    if validate_uuid(value):
+        return value
+    return encode_legacy_identifier(value)
+
+
+def _canonical_task_payload(kind: str, payload: dict) -> dict:
+    """Remap old Task references before they are merged into current state."""
+    result = dict(payload)
+    for key in ("ar", "pr", "agr", "tg", "rt", "dl", "pn"):
+        value = result.get(key)
+        if isinstance(value, list):
+            result[key] = [canonical_legacy_identifier(v) for v in value]
+    return result
+
+
+def _tombstone_target(kind: str, payload: dict) -> str:
+    target = (
+        payload.get("dloid")
+        or payload.get("deleted-object-id")
+        or payload.get("deleted_object_id")
+        or ""
+    )
+    if not isinstance(target, str):
+        return ""
+    # Plain Tombstone records predate the Base58 migration. Tombstone2
+    # records always target current identifiers.
+    if kind == "Tombstone":
+        return canonical_legacy_identifier(target)
+    return canonical_legacy_identifier(target)
+
+
+def _server_confirmed_items(items: list[dict]) -> list[dict]:
+    """Return only history records confirmed by a Things Cloud cursor.
+
+    Older releases appended successfully committed outbox records without a
+    ``server_index``. Those remain useful for diagnosis, but they must not be
+    projected as current server state or used as a write preflight target.
+    """
+    return [
+        item
+        for item in items
+        if isinstance(item, dict) and item.get("server_index") is not None
+    ]
 
 
 # ============================================================
@@ -795,115 +874,182 @@ def notes_to_cloud(text: str) -> dict:
     return {"_t": "tx", "t": 1, "ch": zlib.crc32(v.encode("utf-8")) & 0xFFFFFFFF, "v": v}
 
 
+def _action_code(value) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _payload_name(payload: dict) -> str:
+    name = payload.get("tt") if isinstance(payload.get("tt"), str) else ""
+    if name:
+        return name.strip()
+    # Some legacy metadata entities store text in Fractus wrapper objects.
+    name = payload.get("pn")
+    if isinstance(name, dict):
+        name = name.get("o") or name.get("c") or ""
+        if isinstance(name, dict):
+            name = name.get("c") or ""
+    return name.strip() if isinstance(name, str) else ""
+
+
+def _payload_is_inactive(payload: dict) -> bool:
+    try:
+        status = int(payload.get("ss", SS_PENDING) or SS_PENDING)
+    except (TypeError, ValueError):
+        status = SS_PENDING
+    return bool(payload.get("tr")) or status != SS_PENDING
+
+
+def _has_active_recurrence(payload: dict) -> bool:
+    if payload.get("rr") is not None or payload.get("rp") is not None:
+        return True
+    if payload.get("rt"):
+        return True
+    if payload.get("icsd") is not None or payload.get("acrd") is not None:
+        return True
+    return False
+
+
+def _has_active_ancestor(
+    task_uuid: str,
+    state: dict[str, dict],
+    *,
+    seen: set[str] | None = None,
+) -> bool:
+    """Return whether all project/heading ancestors are still actionable."""
+    seen = set() if seen is None else seen
+    if task_uuid in seen:
+        return True
+    seen.add(task_uuid)
+    current = state.get(task_uuid)
+    if current is None:
+        return False
+    payload = current.get("p", {})
+    if _payload_is_inactive(payload):
+        return False
+    for key in ("pr", "agr"):
+        value = payload.get(key)
+        if not isinstance(value, list):
+            continue
+        for parent_uuid in value:
+            if not isinstance(parent_uuid, str) or not parent_uuid:
+                continue
+            if parent_uuid not in state:
+                return False
+            if not _has_active_ancestor(parent_uuid, state, seen=seen):
+                return False
+    return True
+
+
 def _rebuild_state(items: list[dict], *, tag_map_out: dict | None = None) -> list[dict]:
-    """
-    将 history items 重建为**完整**的当前任务状态快照。
-    包括所有状态: 待办 / 已完成 / 已取消 / 已删除。
+    """Replay history in order and return the current task projection.
 
-    重要: 第一遍先扫 Tag4 / Area3 实体检出 {uuid: 中文名} 映射,
-          第二遍处理 Task*, 格式化时把 tg/pr/ar 的 UUID 翻译成中文。
-    tag_map_out: v2.5.22 — 传入 dict 时把 {uuid: 标签名} 写进去 (供写操作做 名字→UUID 映射)。
+    A modification only applies to an entity that already exists. This is
+    important for caches that contain a successful commit record without its
+    server cursor or for truncated history: a sparse modification must never
+    invent an entity. Deletion actions and tombstones are applied at their
+    position in history, so a later re-create is not incorrectly erased.
     """
-    # ---------- 第一遍: 扫 Tag4 / Area3, 构建名字映射 ----------
-    tag_map: dict[str, str] = {}       # Tag4 uuid -> 标签中文名
-    area_map: dict[str, str] = {}      # Area3 uuid -> 区域名
-
-    # 用 state 累积 Tag4/Area3 的最新 payload (支持 modified 覆盖)
-    meta_state: dict[str, tuple[str, dict]] = {}  # uuid -> (kind, latest_payload)
+    tag_state: dict[str, tuple[str, dict]] = {}
+    task_state: dict[str, dict] = {}
 
     for item in items:
-        try:
-            uuid = item["uuid"]
-            kind = item.get("e", "")
-            action = item.get("t", -1)
-            payload = item.get("p", {})
-            if not isinstance(payload, dict):
-                payload = {}
+        if not isinstance(item, dict):
+            continue
+        uuid = item.get("uuid")
+        kind = str(item.get("e") or "")
+        payload = item.get("p", {})
+        if not isinstance(uuid, str) or not isinstance(payload, dict):
+            continue
+        action = _action_code(item.get("t", -1))
+        canonical_uuid = canonical_legacy_identifier(uuid)
 
-            if kind == KIND_TAG or kind == KIND_AREA:
-                if action == ACTION_CREATED or uuid not in meta_state:
-                    meta_state[uuid] = (kind, dict(payload))
-                elif action == ACTION_MODIFIED and uuid in meta_state:
-                    prev_kind, prev_p = meta_state[uuid]
-                    prev_p.update(payload)
-                    meta_state[uuid] = (prev_kind, prev_p)
-        except Exception:
+        if kind in TOMBSTONE_KINDS:
+            target = _tombstone_target(kind, payload)
+            if target:
+                task_state.pop(target, None)
+                tag_state.pop(target, None)
             continue
 
-    # 从 meta_state 提取名字
-    for uuid, (kind, p) in meta_state.items():
-        name = p.get("tt", "") if isinstance(p.get("tt"), str) else ""
-        if not name:
-            # Fractus 兜底: {"o":"text"} 或 {"o":{"c":"..."}}
-            name = (p.get("tt") or p.get("pn") or "")
-            if isinstance(name, dict):
-                name = (name.get("o") or name.get("c") or "")
-                if isinstance(name, dict):
-                    name = name.get("c", "")
-        if kind == KIND_TAG and name:
-            tag_map[uuid] = name
-        elif kind == KIND_AREA and name:
-            area_map[uuid] = name
+        if kind in AREA_KINDS or kind in TAG_KINDS:
+            canonical_payload = _canonical_task_payload(kind, payload)
+            if action == ACTION_CREATED:
+                tag_state[canonical_uuid] = (kind, canonical_payload)
+            elif action == ACTION_MODIFIED and canonical_uuid in tag_state:
+                tag_state[canonical_uuid][1].update(canonical_payload)
+                tag_state[canonical_uuid] = (
+                    kind,
+                    tag_state[canonical_uuid][1],
+                )
+            elif action == ACTION_DELETED:
+                tag_state.pop(canonical_uuid, None)
+            continue
 
+        if not kind.startswith("Task"):
+            continue
+        canonical_payload = _canonical_task_payload(kind, payload)
+        if action == ACTION_CREATED:
+            task_state[canonical_uuid] = {
+                "uuid": canonical_uuid,
+                "kind": kind,
+                "p": canonical_payload,
+            }
+        elif action == ACTION_MODIFIED and canonical_uuid in task_state:
+            task_state[canonical_uuid]["kind"] = kind
+            task_state[canonical_uuid]["p"].update(canonical_payload)
+        elif action == ACTION_DELETED:
+            task_state.pop(canonical_uuid, None)
+
+    tag_map: dict[str, str] = {}
+    area_map: dict[str, str] = {}
+    for uuid, (kind, payload) in tag_state.items():
+        name = _payload_name(payload)
+        if not name:
+            continue
+        if kind in TAG_KINDS:
+            tag_map[uuid] = name
+        elif kind in AREA_KINDS:
+            area_map[uuid] = name
     if tag_map_out is not None:
+        tag_map_out.clear()
         tag_map_out.update(tag_map)
 
-    _log.debug(f"[rebuild] tag_map={len(tag_map)} area_map={len(area_map)}")
-
-    # ---------- 第二遍: 处理 Task* ----------
-    state: dict[str, dict] = {}
-
-    for item in items:
-        try:
-            uuid = item["uuid"]
-            kind = item.get("e", "")
-            action = item.get("t", -1)
-            payload = item.get("p", {})
-
-            # 只处理 Task* 系列 (任务/项目/Heading)
-            if not (kind.startswith("Task") or kind in (KIND_TASK6, KIND_TASK7)):
-                continue
-
-            # payload 可能是非 dict (Fractus 旧格式), 兜底
-            if not isinstance(payload, dict):
-                payload = {}
-
-            if action == ACTION_CREATED or uuid not in state:
-                state[uuid] = {"uuid": uuid, "kind": kind, "p": dict(payload)}
-            elif action == ACTION_MODIFIED:
-                if uuid in state:
-                    state[uuid]["p"].update(payload)
-        except Exception as e:
-            print(f"[rebuild] skip item: {e}")
-            continue
-
-    # 项目和任务共用 Task 实体，先建立项目 UUID -> 标题映射。
     project_map: dict[str, str] = {}
-    for uuid, item in state.items():
+    for uuid, item in task_state.items():
         payload = item.get("p", {})
         try:
             is_project = int(payload.get("tp", 0) or 0) == 1
         except (TypeError, ValueError):
             is_project = False
         if is_project:
-            title = payload.get("tt") or payload.get("ti") or ""
-            if isinstance(title, str) and title.strip():
-                project_map[uuid] = title.strip()
+            title = _payload_name(payload)
+            if title:
+                project_map[uuid] = title
 
-    # 格式化输出 —— 单条坏数据不炸全量
+    _log.debug(
+        "[rebuild] tasks=%d tags=%d areas=%d",
+        len(task_state),
+        len(tag_map),
+        len(area_map),
+    )
     result = []
-    for v in state.values():
+    for raw in task_state.values():
         try:
-            result.append(
-                _format_task_full(
-                    v,
-                    tag_map=tag_map,
-                    area_map=area_map,
-                    project_map=project_map,
-                )
+            formatted = _format_task_full(
+                raw,
+                tag_map=tag_map,
+                area_map=area_map,
+                project_map=project_map,
             )
-        except Exception as e:
-            print(f"[rebuild] format fail {v.get('uuid','?')}: {e}")
+            formatted["ancestors_available"] = _has_active_ancestor(
+                raw["uuid"], task_state
+            )
+            formatted["recurring"] = _has_active_recurrence(raw.get("p", {}))
+            result.append(formatted)
+        except Exception as exc:
+            _log.warning("[rebuild] format fail %s: %s", raw.get("uuid"), exc)
     return result
 
 
@@ -1015,7 +1161,7 @@ def _format_task_full(raw: dict, *, tag_map: dict[str, str] | None = None,
     return {
         "uuid": raw["uuid"],
         "kind": raw["kind"],
-        "title": _safe_str(p.get("tt") or p.get("ti"), "(no title)"),
+        "title": _safe_str(p.get("tt"), "(no title)"),
         "notes": notes_from_cloud(p.get("nt")),
         "status": ss,
         "human_status": human_status,
@@ -1030,7 +1176,11 @@ def _format_task_full(raw: dict, *, tag_map: dict[str, str] | None = None,
         "deadline_date": _ts_to_date(p.get("dd") or p.get("dl")),
         "completion_date": _ts_to_date(p.get("sp") or p.get("comd")),
         # tags: Task6.tg 存的是 Tag4 UUID 列表 → 翻译成中文名
-        "tags": [tag_map.get(u, u) for u in _safe_list(p.get("tg"))],
+        "tags": [
+            tag_map[u]
+            for u in _safe_list(p.get("tg"))
+            if u in tag_map
+        ],
         "project_uuid": project_uuids,
         "project_uuids": project_uuids,
         "heading_uuid": heading_uuids,
@@ -1119,6 +1269,7 @@ def filter_tasks(tasks: list[dict], *, only_pending: bool = True,
             return None
 
     result = []
+    actionable_lists = {"inbox", "today", "anytime", "someday", "upcoming"}
     for t in tasks:
         # 🚨 所有非 trash 列表都要跳过 trashed=True 的任务 (iOS Things 也这么做)
         # 这是"trash 任务仍显示在 inbox 里"的根因
@@ -1131,6 +1282,14 @@ def filter_tasks(tasks: list[dict], *, only_pending: bool = True,
             continue
 
         if list_name:
+            if list_name in actionable_lists:
+                if t.get("recurring") or not t.get("ancestors_available", True):
+                    continue
+            # Smart lists contain actionable tasks. Projects and headings
+            # have their own views and must not leak into these task lists.
+            if list_name in actionable_lists and t.get("type") != "task":
+                continue
+
             st = t.get("st_code", 0)
             scheduled_date = _scheduled_date(t)
 

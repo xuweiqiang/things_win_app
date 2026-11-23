@@ -291,7 +291,9 @@
                      placeholder="搜索">
             </div>
             <button class="icon-button" title="刷新" :disabled="loading" @click="refreshData">↻</button>
-            <button class="primary h-9 text-xs flex items-center gap-1.5" @click="openCreate('task')">
+            <button class="primary h-9 text-xs flex items-center gap-1.5"
+                    title="新建任务；按 Ctrl+T 快速创建今天的任务"
+                    @click="openCreate('task')">
               <span class="text-base leading-none">＋</span> 新建
             </button>
           </div>
@@ -547,7 +549,8 @@
         <button type="button" class="icon-button" @click="showCreate = false">✕</button>
       </div>
       <div class="mt-5 space-y-4">
-        <input v-model="createForm.title" class="field text-base font-medium" placeholder="标题" autofocus required>
+        <input ref="createTitleInput" v-model="createForm.title" class="field text-base font-medium"
+               placeholder="标题" autofocus required>
         <div v-if="createMode === 'task'" class="grid grid-cols-2 gap-3">
           <label>
             <span class="text-xs text-gray-500">放入</span>
@@ -686,7 +689,7 @@
 </div>
 
 <script>
-const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted } = Vue;
+const { createApp, ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } = Vue;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -756,6 +759,7 @@ createApp({
     const showSync = ref(false);
     const toast = ref(null);
     const lightbox = ref(null);
+    const createTitleInput = ref(null);
     let toastTimer = null;
 
     const emptyCreate = () => ({
@@ -1181,6 +1185,30 @@ createApp({
       showCreate.value = true;
     }
 
+    function openTodayTask() {
+      if (!auth.value || showCreate.value || showSync.value || lightbox.value) return;
+      openCreate('task');
+      createForm.when = 'today';
+    }
+
+    function onGlobalKeydown(event) {
+      const hasControl = event.ctrlKey || event.getModifierState?.('Control');
+      const isT = String(event.key || '').toLowerCase() === 't'
+        || event.code === 'KeyT'
+        || event.keyCode === 84;
+      if (
+        event.repeat ||
+        !hasControl ||
+        event.altKey ||
+        event.shiftKey ||
+        !isT
+      ) {
+        return;
+      }
+      event.preventDefault();
+      openTodayTask();
+    }
+
     function toggleCreateTag(name) {
       const list = [...createTagList.value];
       const index = list.indexOf(name);
@@ -1478,7 +1506,14 @@ createApp({
       searchTimer = setTimeout(fetchTasks, 250);
     });
 
+    watch(showCreate, async (open) => {
+      if (!open) return;
+      await nextTick();
+      createTitleInput.value?.focus();
+    });
+
     onMounted(() => {
+      window.addEventListener('keydown', onGlobalKeydown);
       bootstrap();
       pollTimer = setInterval(async () => {
         if (!auth.value) return;
@@ -1493,6 +1528,7 @@ createApp({
     });
 
     onUnmounted(() => {
+      window.removeEventListener('keydown', onGlobalKeydown);
       clearInterval(pollTimer);
       clearTimeout(searchTimer);
       clearTimeout(toastTimer);

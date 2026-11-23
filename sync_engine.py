@@ -23,6 +23,7 @@ import requests
 
 from things_cloud import (
     ACTION_CREATED,
+    ACTION_DELETED,
     ACTION_MODIFIED,
     KIND_AREA,
     KIND_TAG,
@@ -35,10 +36,15 @@ from things_cloud import (
     ThingsClient,
     ThingsCloudError,
     ThingsConflictError,
+    TOMBSTONE_KINDS,
+    _canonical_task_payload,
     _date_to_ts,
     _rebuild_state,
     _resolve_when,
+    _server_confirmed_items,
     _things_now,
+    _tombstone_target,
+    canonical_legacy_identifier,
     filter_tasks,
     new_uuid,
     notes_to_cloud,
@@ -332,18 +338,30 @@ def _raw_task_state(items: list[dict]) -> dict[str, dict]:
     state: dict[str, dict] = {}
     for item in items:
         kind = str(item.get("e") or "")
-        if not kind.startswith("Task"):
-            continue
         item_uuid = item.get("uuid")
         payload = item.get("p")
         if not isinstance(item_uuid, str) or not isinstance(payload, dict):
             continue
         action = item.get("t", -1)
-        if action == ACTION_CREATED or item_uuid not in state:
-            state[item_uuid] = {"kind": kind, "p": dict(payload)}
+        if kind in TOMBSTONE_KINDS:
+            target = _tombstone_target(kind, payload)
+            if target:
+                state.pop(target, None)
+            continue
+        if not kind.startswith("Task"):
+            continue
+        item_uuid = canonical_legacy_identifier(item_uuid)
+        canonical_payload = _canonical_task_payload(kind, payload)
+        if action == ACTION_CREATED:
+            state[item_uuid] = {
+                "kind": kind,
+                "p": canonical_payload,
+            }
         elif action == ACTION_MODIFIED and item_uuid in state:
-            state[item_uuid]["p"].update(payload)
+            state[item_uuid]["p"].update(canonical_payload)
             state[item_uuid]["kind"] = kind
+        elif action == ACTION_DELETED:
+            state.pop(item_uuid, None)
     return state
 
 
@@ -368,11 +386,19 @@ def _task_target_state(items: list[dict], target_uuid: str) -> dict:
     icsd = acrd = False
     affected_indexes: dict[int, int] = {}
 
+    target_uuid = canonical_legacy_identifier(target_uuid)
     for position, item in enumerate(items):
-        if item.get("uuid") != target_uuid:
-            continue
         kind = str(item.get("e") or "")
-        if not kind.startswith("Task"):
+        item_uuid = item.get("uuid")
+        payload = item.get("p")
+        if not isinstance(item_uuid, str) or not isinstance(payload, dict):
+            continue
+        item_uuid = canonical_legacy_identifier(item_uuid)
+        tombstone = kind in TOMBSTONE_KINDS
+        if tombstone:
+            if _tombstone_target(kind, payload) != target_uuid:
+                continue
+        elif item_uuid != target_uuid or not kind.startswith("Task"):
             continue
 
         state["affected"] = True
@@ -384,12 +410,19 @@ def _task_target_state(items: list[dict], target_uuid: str) -> dict:
             index = position
         affected_indexes[index] = affected_indexes.get(index, 0) + 1
 
+        action = item.get("t")
+        if tombstone or action == ACTION_DELETED:
+            state["exists"] = False
+            rr_known = rp_known = rt_known = False
+            rr_active = rp_active = rt_active = False
+            icsd = acrd = False
+            continue
+
         if kind not in ("Task6", "Task7"):
             state["future"] = True
             state["ambiguous"] = True
             continue
 
-        action = item.get("t")
         if action == ACTION_CREATED:
             if state["exists"]:
                 state["ambiguous"] = True
@@ -402,20 +435,11 @@ def _task_target_state(items: list[dict], target_uuid: str) -> dict:
             if not state["exists"]:
                 state["ambiguous"] = True
             state["latest_kind"] = kind
-        elif action == 2:
-            state["exists"] = False
-            rr_known = rp_known = rt_known = False
-            rr_active = rp_active = rt_active = False
-            icsd = acrd = False
-            continue
         else:
             state["ambiguous"] = True
             continue
 
-        payload = item.get("p")
-        if not isinstance(payload, dict):
-            state["ambiguous"] = True
-            continue
+        payload = _canonical_task_payload(kind, payload)
         if "rr" in payload:
             rr_known = True
             rr_active = payload["rr"] is not None
@@ -446,16 +470,27 @@ def _task_target_state(items: list[dict], target_uuid: str) -> dict:
 def _raw_meta_state(items: list[dict], kind: str) -> dict[str, dict]:
     state: dict[str, dict] = {}
     for item in items:
-        if item.get("e") != kind:
-            continue
+        item_kind = str(item.get("e") or "")
         item_uuid = item.get("uuid")
         payload = item.get("p")
         if not isinstance(item_uuid, str) or not isinstance(payload, dict):
             continue
-        if item.get("t") == ACTION_CREATED or item_uuid not in state:
-            state[item_uuid] = dict(payload)
-        elif item.get("t") == ACTION_MODIFIED and item_uuid in state:
-            state[item_uuid].update(payload)
+        action = item.get("t", -1)
+        if item_kind in TOMBSTONE_KINDS:
+            target = _tombstone_target(item_kind, payload)
+            if target:
+                state.pop(target, None)
+            continue
+        if item_kind != kind:
+            continue
+        item_uuid = canonical_legacy_identifier(item_uuid)
+        canonical_payload = _canonical_task_payload(item_kind, payload)
+        if action == ACTION_CREATED:
+            state[item_uuid] = canonical_payload
+        elif action == ACTION_MODIFIED and item_uuid in state:
+            state[item_uuid].update(canonical_payload)
+        elif action == ACTION_DELETED:
+            state.pop(item_uuid, None)
     return state
 
 
@@ -501,9 +536,10 @@ class SafeThings:
         self._online = True
         self._last_error = ""
         self._tag_map: dict[str, str] = {}
+        confirmed = _server_confirmed_items(self._raw_items)
         self._tasks = (
-            _rebuild_state(self._raw_items, tag_map_out=self._tag_map)
-            if self._raw_items
+            _rebuild_state(confirmed, tag_map_out=self._tag_map)
+            if confirmed
             else None
         )
 
@@ -551,7 +587,8 @@ class SafeThings:
         self._online = True
         self._last_error = ""
         self._tasks = _rebuild_state(
-            self._raw_items, tag_map_out=self._tag_map
+            _server_confirmed_items(self._raw_items),
+            tag_map_out=self._tag_map,
         )
         self._persist()
 
@@ -578,7 +615,7 @@ class SafeThings:
         return items
 
     def _rebuild_projection(self) -> None:
-        combined = self._raw_items + self._pending_items()
+        combined = _server_confirmed_items(self._raw_items) + self._pending_items()
         self._tasks = _rebuild_state(combined, tag_map_out=self._tag_map)
 
     def get_all_tasks(self) -> list[dict]:
@@ -639,7 +676,9 @@ class SafeThings:
     # ---------- item construction ----------
 
     def _task_state(self) -> dict[str, dict]:
-        return _raw_task_state(self._raw_items + self._pending_items())
+        return _raw_task_state(
+            _server_confirmed_items(self._raw_items) + self._pending_items()
+        )
 
     def _current_payload(self, task_uuid: str) -> dict:
         _validate_reference(task_uuid, "任务")
@@ -655,7 +694,9 @@ class SafeThings:
         become the concurrency baseline, otherwise a second offline edit to
         the same field looks like an external modification on reconnect.
         """
-        remote = _raw_task_state(self._raw_items).get(task_uuid)
+        remote = _raw_task_state(
+            _server_confirmed_items(self._raw_items)
+        ).get(canonical_legacy_identifier(task_uuid))
         if remote and isinstance(remote.get("p"), dict):
             return copy.deepcopy(remote["p"])
         return current
@@ -663,7 +704,9 @@ class SafeThings:
     def _modify_entity_kind(
         self, task_uuid: str, current: dict, action: str
     ) -> str:
-        raw_target = _task_target_state(self._raw_items, task_uuid)
+        raw_target = _task_target_state(
+            _server_confirmed_items(self._raw_items), task_uuid
+        )
         if raw_target["affected"]:
             if (
                 not raw_target["exists"]
@@ -717,7 +760,9 @@ class SafeThings:
         )
         if not outgoing:
             raise SyncError("待提交操作缺少目标任务")
-        raw_target = _task_target_state(raw_items, task_uuid)
+        raw_target = _task_target_state(
+            _server_confirmed_items(raw_items), task_uuid
+        )
         if not raw_target["affected"]:
             raise SyncError("任务不在已确认的远端历史中，安全写入已拒绝修改")
         if (
@@ -745,7 +790,8 @@ class SafeThings:
 
     def _tag_ids_for_names(self, names: list[str] | None) -> tuple[list[str], list[dict]]:
         tag_state = _raw_meta_state(
-            self._raw_items + self._pending_items(), KIND_TAG
+            _server_confirmed_items(self._raw_items) + self._pending_items(),
+            KIND_TAG,
         )
         name_to_uuid = {
             str(payload.get("tt") or payload.get("ti") or "").strip(): tag_uuid
@@ -807,7 +853,9 @@ class SafeThings:
         if not area_uuid:
             return
         _validate_reference(area_uuid, "区域")
-        if area_uuid not in _raw_meta_state(self._raw_items, KIND_AREA):
+        if area_uuid not in _raw_meta_state(
+            _server_confirmed_items(self._raw_items), KIND_AREA
+        ):
             raise SyncError("目标区域不存在")
 
     def _sort_index(self, st: int, project_uuid: str | None = None) -> int:
@@ -943,8 +991,10 @@ class SafeThings:
     def _remote_field_conflict(
         self, operation: dict, remote_items: list[dict]
     ) -> bool:
-        task_uuid = operation["uuid"]
-        remote_state = _raw_task_state(remote_items)
+        task_uuid = canonical_legacy_identifier(operation["uuid"])
+        remote_state = _raw_task_state(
+            _server_confirmed_items(remote_items)
+        )
         current = remote_state.get(task_uuid)
         if operation["action"] == "create":
             return current is not None
@@ -1058,7 +1108,12 @@ class SafeThings:
                     self._persist()
                     return
 
-                self._raw_items.extend(copy.deepcopy(operation["items"]))
+                confirmed_items = []
+                for item in operation["items"]:
+                    copied = copy.deepcopy(item)
+                    copied["server_index"] = int(ancestor)
+                    confirmed_items.append(copied)
+                self._raw_items.extend(confirmed_items)
                 self._head_index = int(new_head)
                 self._last_sync = _iso_now()
                 self._online = True
@@ -1078,6 +1133,14 @@ class SafeThings:
     def flush(self) -> dict:
         with self._lock:
             self._flush_locked()
+            self._rebuild_projection()
+            return self.sync_status()
+
+    def sync_now(self) -> dict:
+        """Flush queued writes, pull remote changes, and rebuild the cache."""
+        with self._lock:
+            self._flush_locked()
+            self._refresh_best_effort()
             self._rebuild_projection()
             return self.sync_status()
 
@@ -1117,7 +1180,9 @@ class SafeThings:
             self._conflicts.remove(conflict)
             if retry:
                 self._refresh_remote(full=True)
-                current = _raw_task_state(self._raw_items).get(conflict["uuid"])
+                current = _raw_task_state(
+                    _server_confirmed_items(self._raw_items)
+                ).get(canonical_legacy_identifier(conflict["uuid"]))
                 if conflict["action"] == "create":
                     if current is not None:
                         self._persist()

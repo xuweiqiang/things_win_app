@@ -79,6 +79,7 @@ def test_non_login_api_endpoints(api_engine):
         assert health["ok"] is True
         assert health["unofficial"] is True
         assert health["authenticated"] is True
+        assert health["version"] == "3.0.3"
         assert health["compatibility_version_code"] == app.THINGS_VERSION_CODE
         assert health["compatibility_platform"] == "macOS"
 
@@ -218,6 +219,13 @@ def test_index_and_local_assets_are_served(api_engine):
         assert "非官方客户端".encode("utf-8") in body
         assert b"/static/vue.global.prod.js" in body
         assert b"/static/tailwindcss.js" in body
+        assert b"window.addEventListener('keydown', onGlobalKeydown)" in body
+        assert b"String(event.key || '').toLowerCase() === 't'" in body
+        assert b"event.getModifierState?.('Control')" in body
+        assert b"createForm.when = 'today'" in body
+        assert b"Ctrl+T" in body
+        assert b"calendar-cell" in body
+        assert "日历".encode("utf-8") in body
 
         for path in (
             "/static/vue.global.prod.js",

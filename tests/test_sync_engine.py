@@ -8,19 +8,23 @@ import requests
 from sync_engine import (
     SafeThings,
     SyncError,
+    _raw_task_state,
     build_task7_create_payload,
     validate_outbound_items,
 )
 from things_cloud import (
     ACTION_CREATED,
+    ACTION_DELETED,
     ACTION_MODIFIED,
     KIND_AREA,
+    KIND_TOMBSTONE,
     SS_CANCELED,
     SS_COMPLETED,
     ST_ANYTIME,
     ST_INBOX,
     ST_SOMEDAY,
     ThingsConflictError,
+    _rebuild_state,
     _date_to_ts,
     _resolve_when,
     new_uuid,
@@ -815,3 +819,81 @@ def test_conflicts_survive_restart(tmp_path):
     conflicts = restarted.get_conflicts()
     assert [item["id"] for item in conflicts] == [conflict_id]
     assert conflicts[0]["fields"] == ["tt"]
+
+
+def test_uncursored_cache_is_hidden_but_pending_outbox_stays_visible(tmp_path):
+    cloud = FakeCloud()
+    engine = make_engine(cloud, tmp_path)
+    ghost_uuid = new_uuid()
+    engine._raw_items = [
+        {
+            "uuid": ghost_uuid,
+            "e": "Task7",
+            "t": ACTION_MODIFIED,
+            "p": {"tt": "Dirty legacy projection", "st": ST_INBOX, "ss": 0},
+        }
+    ]
+    engine._persist()
+
+    cloud.offline = True
+    restarted = make_engine(cloud, tmp_path)
+    pending_uuid = restarted.add_task("Pending offline")
+
+    visible = restarted.get_all_tasks()
+
+    assert [task["uuid"] for task in visible] == [pending_uuid]
+    assert ghost_uuid not in {task["uuid"] for task in visible}
+
+
+def test_successful_commit_records_are_confirmed_by_server_cursor(tmp_path):
+    cloud = FakeCloud()
+    engine = make_engine(cloud, tmp_path)
+
+    task_uuid = engine.add_task("Committed with cursor", tags=["durable"])
+
+    committed = [
+        item for item in engine._raw_items if item["uuid"] == task_uuid
+    ]
+    assert committed
+    assert all(item.get("server_index") is not None for item in committed)
+    assert all(item.get("server_index") is not None for item in engine._raw_items)
+
+
+def test_raw_write_state_and_ui_projection_agree_on_delete_and_recreate():
+    task_uuid = new_uuid()
+    items = [
+        {
+            "uuid": task_uuid,
+            "e": "Task7",
+            "t": ACTION_CREATED,
+            "p": task_payload("First"),
+            "server_index": 0,
+        },
+        {
+            "uuid": task_uuid,
+            "e": "Task7",
+            "t": ACTION_DELETED,
+            "p": {},
+            "server_index": 1,
+        },
+        {
+            "uuid": new_uuid(),
+            "e": KIND_TOMBSTONE,
+            "t": ACTION_CREATED,
+            "p": {"dloid": task_uuid},
+            "server_index": 2,
+        },
+        {
+            "uuid": task_uuid,
+            "e": "Task7",
+            "t": ACTION_CREATED,
+            "p": task_payload("Restored"),
+            "server_index": 3,
+        },
+    ]
+
+    raw_state = _raw_task_state(items)
+    projected = _rebuild_state(items)
+
+    assert raw_state[task_uuid]["p"]["tt"] == "Restored"
+    assert [task["title"] for task in projected] == ["Restored"]

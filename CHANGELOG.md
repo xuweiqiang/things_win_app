@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.0.3 - 2026-11-23
+
+- Rebuilt task state by replaying Cloud history in order, including deletes
+  and tombstones, so stale or incomplete cache records no longer appear as
+  real tasks.
+- Hidden orphaned modifications, recurring templates and tasks under inactive
+  project/heading ancestors from smart task lists.
+- Cleared deleted tags from the task projection and preserved valid offline
+  outbox items while ignoring uncursored legacy cache records.
+- Added a single-instance process mutex. Launching the EXE again restores the
+  existing window instead of starting a second client.
+- Closing the window now minimizes it; the app remains in the taskbar and a
+  background thread continues synchronizing every 15 seconds without prompts.
+
+## 3.0.2 - 2026-11-23
+
+- Added `Ctrl+T` as a global shortcut for creating a new task scheduled today.
+- The shortcut opens the create dialog, preselects Today and focuses the title.
+
 ## 3.0.1 - 2026-11-23
 
 - Fixed Today to use an exact local scheduled date instead of retaining every

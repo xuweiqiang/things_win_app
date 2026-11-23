@@ -24,8 +24,8 @@ from things_cloud import (
     filter_tasks,
 )
 
-VERSION = "3.0.1"
-DISPLAY_VERSION = "3.0.1"
+VERSION = "3.0.3"
+DISPLAY_VERSION = "3.0.3"
 APP_NAME = "Things Windows"
 PROJECT_URL = "https://github.com/xuweiqiang/things_win_app"
 DEFAULT_PORT = 55234
@@ -162,6 +162,15 @@ def _session_info() -> dict:
             "authenticated": engine is not None,
             "email": _session.get("email", ""),
         }
+
+
+def sync_authenticated_session() -> dict | None:
+    """Synchronize the active account independently of WebView timers."""
+    with _session_lock:
+        engine = _session.get("things")
+    if engine is None:
+        return None
+    return engine.sync_now()
 
 
 def _open_session(email: str, password: str) -> tuple[SafeThings, str]:
