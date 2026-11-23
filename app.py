@@ -24,8 +24,8 @@ from things_cloud import (
     filter_tasks,
 )
 
-VERSION = "3.0.0"
-DISPLAY_VERSION = "3.0"
+VERSION = "3.0.1"
+DISPLAY_VERSION = "3.0.1"
 APP_NAME = "Things Windows"
 PROJECT_URL = "https://github.com/xuweiqiang/things_win_app"
 DEFAULT_PORT = 55234

@@ -102,6 +102,27 @@
       color: #767c89;
     }
     .icon-button:hover { background: #f0f1f4; color: #30343d; }
+    .calendar-cell {
+      min-height: 74px;
+      background: white;
+      padding: 8px;
+      text-align: left;
+      transition: background .12s ease, box-shadow .12s ease;
+    }
+    .calendar-cell:hover { background: #f8faff; }
+    .calendar-cell.outside { background: #fbfbfc; color: #b4b8c1; }
+    .calendar-cell.selected {
+      position: relative;
+      z-index: 1;
+      background: var(--blue-soft);
+      box-shadow: inset 0 0 0 2px #7eafff;
+    }
+    .calendar-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      display: inline-block;
+    }
     .modal-backdrop {
       position: fixed;
       inset: 0;
@@ -204,7 +225,7 @@
                 :class="currentList === item.key ? 'bg-white shadow-sm font-medium text-gray-900' : 'text-gray-600 hover:bg-white/60'">
           <span class="w-5 text-center">{{ item.icon }}</span>
           <span class="flex-1">{{ item.label }}</span>
-          <span class="text-[11px] text-gray-400">{{ item.count }}</span>
+          <span v-if="item.count !== ''" class="text-[11px] text-gray-400">{{ item.count }}</span>
         </button>
       </nav>
 
@@ -277,8 +298,65 @@
         </header>
 
         <div class="flex-1 overflow-auto scrollbar">
+          <section v-if="currentList === 'calendar'" class="border-b border-gray-100">
+            <div class="px-5 pt-4 pb-3 flex items-center gap-2">
+              <div class="min-w-0">
+                <div class="text-[15px] font-semibold">{{ calendarMonthLabel }}</div>
+                <div class="text-[10px] text-gray-400 mt-0.5">选择日期查看日程与截止任务</div>
+              </div>
+              <div class="ml-auto flex items-center gap-1">
+                <button class="icon-button" title="上个月" @click="changeCalendarMonth(-1)">‹</button>
+                <button class="secondary !px-3 !py-1.5 text-[11px]" @click="showCalendarToday">今天</button>
+                <button class="icon-button" title="下个月" @click="changeCalendarMonth(1)">›</button>
+              </div>
+            </div>
+
+            <div class="px-4">
+              <div class="grid grid-cols-7 text-center text-[10px] text-gray-400 py-1.5">
+                <div v-for="weekday in calendarWeekdays" :key="weekday">{{ weekday }}</div>
+              </div>
+              <div class="grid grid-cols-7 gap-px bg-gray-100 border border-gray-100 rounded-xl overflow-hidden mb-4">
+                <button v-for="day in calendarDays" :key="day.key"
+                        class="calendar-cell"
+                        :class="{
+                          outside: !day.inMonth,
+                          selected: day.date === selectedCalendarDate,
+                        }"
+                        :title="`${day.date} · ${day.taskCount} 项`"
+                        @click="selectCalendarDate(day)">
+                  <span class="inline-flex w-6 h-6 items-center justify-center rounded-full text-[11px] font-medium"
+                        :class="day.isToday && day.date !== selectedCalendarDate ? 'bg-blue-50 text-blue-600 ring-1 ring-blue-200' : ''">
+                    {{ day.day }}
+                  </span>
+                  <div class="mt-1 space-y-1">
+                    <div v-if="day.scheduledCount" class="flex items-center gap-1 text-[9px] text-blue-600">
+                      <span class="calendar-dot bg-blue-500"></span>
+                      <span>日程 {{ day.scheduledCount }}</span>
+                    </div>
+                    <div v-if="day.deadlineCount" class="flex items-center gap-1 text-[9px] text-orange-600">
+                      <span class="calendar-dot bg-orange-400"></span>
+                      <span>截止 {{ day.deadlineCount }}</span>
+                    </div>
+                  </div>
+                </button>
+              </div>
+              <div class="pb-3 flex items-center justify-between">
+                <div>
+                  <div class="text-[13px] font-semibold">{{ calendarSelectedLabel }}</div>
+                  <div class="text-[10px] text-gray-400 mt-0.5">
+                    日程 {{ selectedCalendarCounts.scheduled }} · 截止 {{ selectedCalendarCounts.deadline }}
+                  </div>
+                </div>
+                <button class="text-[11px] text-blue-600 hover:text-blue-700"
+                        @click="openCreate('task')">＋ 在此日期新建</button>
+              </div>
+            </div>
+          </section>
+
           <div v-if="loading" class="p-8 text-center text-sm text-gray-400">正在同步…</div>
-          <div v-else-if="!displayTasks.length" class="h-full flex flex-col items-center justify-center text-gray-400">
+          <div v-else-if="!displayTasks.length"
+               class="flex flex-col items-center justify-center text-gray-400"
+               :class="currentList === 'calendar' ? 'py-10' : 'h-full'">
             <div class="text-4xl mb-3">{{ emptyIcon }}</div>
             <div class="text-sm">{{ emptyText }}</div>
             <button class="text-xs text-blue-500 mt-3" @click="openCreate(currentList === 'projects' ? 'project' : 'task')">
@@ -304,6 +382,10 @@
                   <span v-if="isPinned(task.uuid)" class="text-orange-400 text-[10px]">置顶</span>
                   <span v-if="task.type === 'project'" class="text-[9px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-500">项目</span>
                   <span v-if="task.human_status === 'trashed'" class="text-[9px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400">垃圾桶</span>
+                  <span v-if="currentList === 'calendar' && task.scheduled_date === selectedCalendarDate"
+                        class="text-[9px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600">日程</span>
+                  <span v-if="currentList === 'calendar' && task.deadline_date === selectedCalendarDate"
+                        class="text-[9px] px-1.5 py-0.5 rounded bg-orange-50 text-orange-600">截止</span>
                 </span>
                 <span class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-400">
                   <span v-if="task.deadline_date" :class="isOverdue(task) ? 'text-red-500' : ''">⚑ {{ task.deadline_date }}</span>
@@ -348,6 +430,16 @@
                       class="secondary text-[11px] py-2 px-2"
                       :class="scheduleMatches(option.value) ? '!border-blue-300 !bg-blue-50 !text-blue-700' : ''"
                       @click="moveSchedule(option.value)">{{ option.label }}</button>
+            </div>
+
+            <div>
+              <div class="text-[10px] uppercase tracking-wider text-gray-400 mb-1.5">日程日期</div>
+              <div class="flex gap-2">
+                <input :value="selectedTask.scheduled_date || ''" type="date" class="field text-sm"
+                       @change="moveScheduleToDate($event.target.value)">
+                <button v-if="selectedTask.scheduled_date" class="icon-button" title="清除日程日期，移到随时"
+                        @click="moveSchedule('anytime')">✕</button>
+              </div>
             </div>
 
             <div>
@@ -616,8 +708,17 @@ async function api(path, options = {}) {
 function localDate(offset = 0) {
   const date = new Date();
   date.setDate(date.getDate() + offset);
+  return dateKey(date);
+}
+
+function dateKey(date) {
   const pad = (value) => String(value).padStart(2, '0');
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function dateFromKey(value) {
+  const [year, month, day] = String(value).split('-').map(Number);
+  return new Date(year, month - 1, day);
 }
 
 createApp({
@@ -636,6 +737,9 @@ createApp({
     const loginError = ref('');
 
     const currentList = ref('today');
+    const calendarMonth = ref(localDate().slice(0, 7));
+    const selectedCalendarDate = ref(localDate());
+    const calendarWeekdays = ['一', '二', '三', '四', '五', '六', '日'];
     const tasks = ref([]);
     const projects = ref([]);
     const areas = ref([]);
@@ -672,6 +776,7 @@ createApp({
       return [
         { key: 'inbox', label: '收件箱', icon: '▣', count: counts.inbox || 0 },
         { key: 'today', label: '今天', icon: '☀', count: counts.today || 0 },
+        { key: 'calendar', label: '日历', icon: '▦', count: '' },
         { key: 'projects', label: '项目', icon: '▤', count: counts.projects || 0 },
         { key: 'anytime', label: '随时', icon: '◷', count: counts.anytime || 0 },
         { key: 'someday', label: '某天', icon: '◇', count: counts.someday || 0 },
@@ -697,7 +802,7 @@ createApp({
         return project?.title || '项目';
       }
       return {
-        inbox: '收件箱', today: '今天', projects: '项目', anytime: '随时',
+        inbox: '收件箱', today: '今天', calendar: '日历', projects: '项目', anytime: '随时',
         someday: '某天', logbook: '日志簿', all: '全部任务', trash: '垃圾桶',
       }[currentList.value] || '任务';
     });
@@ -706,19 +811,92 @@ createApp({
       if (currentList.value.startsWith('tag:')) return '带此标签的所有未删除任务';
       if (currentList.value.startsWith('project:')) return '项目内任务';
       return {
-        inbox: '尚未安排的想法', today: '今天和逾期任务', projects: '所有项目',
+        inbox: '尚未安排的想法', today: '安排在今天的任务', calendar: '按日程与截止日期浏览',
+        projects: '所有项目',
         anytime: '随时可以开始', someday: '以后处理', logbook: '已完成与已取消',
         all: '所有待办', trash: '已移入垃圾桶的项目与任务',
       }[currentList.value] || '';
     });
 
+    const calendarEventIndex = computed(() => {
+      const index = new Map();
+      const add = (key, kind, uuid) => {
+        if (!key) return;
+        if (!index.has(key)) {
+          index.set(key, { scheduled: new Set(), deadline: new Set() });
+        }
+        index.get(key)[kind].add(uuid);
+      };
+      for (const task of tasks.value) {
+        if (task.trashed || task.human_status !== 'pending') continue;
+        add(task.scheduled_date, 'scheduled', task.uuid);
+        add(task.deadline_date, 'deadline', task.uuid);
+      }
+      return index;
+    });
+
+    const calendarDays = computed(() => {
+      const [year, month] = calendarMonth.value.split('-').map(Number);
+      const monthStart = new Date(year, month - 1, 1);
+      const mondayOffset = (monthStart.getDay() + 6) % 7;
+      const today = localDate();
+      return Array.from({ length: 42 }, (_, offset) => {
+        const date = new Date(year, month - 1, 1 - mondayOffset + offset);
+        const key = dateKey(date);
+        const event = calendarEventIndex.value.get(key);
+        const scheduledCount = event?.scheduled.size || 0;
+        const deadlineCount = event?.deadline.size || 0;
+        return {
+          key,
+          date: key,
+          day: date.getDate(),
+          inMonth: date.getMonth() === month - 1,
+          isToday: key === today,
+          scheduledCount,
+          deadlineCount,
+          taskCount: new Set([
+            ...(event?.scheduled || []),
+            ...(event?.deadline || []),
+          ]).size,
+        };
+      });
+    });
+
+    const calendarMonthLabel = computed(() =>
+      new Intl.DateTimeFormat('zh-CN', {
+        year: 'numeric', month: 'long',
+      }).format(dateFromKey(`${calendarMonth.value}-01`))
+    );
+
+    const calendarSelectedLabel = computed(() => {
+      const date = dateFromKey(selectedCalendarDate.value);
+      const label = new Intl.DateTimeFormat('zh-CN', {
+        month: 'long', day: 'numeric', weekday: 'short',
+      }).format(date);
+      return selectedCalendarDate.value === localDate() ? `今天 · ${label}` : label;
+    });
+
+    const selectedCalendarCounts = computed(() => {
+      const event = calendarEventIndex.value.get(selectedCalendarDate.value);
+      return {
+        scheduled: event?.scheduled.size || 0,
+        deadline: event?.deadline.size || 0,
+      };
+    });
+
     const displayTasks = computed(() => {
       const word = searchKeyword.value.trim().toLocaleLowerCase();
       let source = tasks.value;
-      if (word && !['today', 'inbox', 'anytime', 'someday', 'trash', 'logbook'].includes(currentList.value)) {
+      if (word) {
         source = source.filter((task) =>
           `${task.title || ''} ${task.notes || ''} ${(task.tags || []).join(' ')}`
             .toLocaleLowerCase().includes(word)
+        );
+      }
+      if (currentList.value === 'calendar') {
+        source = source.filter((task) =>
+          task.scheduled_date === selectedCalendarDate.value ||
+          task.deadline_date === selectedCalendarDate.value
         );
       }
       const decorated = [...source];
@@ -732,8 +910,16 @@ createApp({
       return decorated;
     });
 
-    const emptyText = computed(() => currentList.value === 'trash' ? '垃圾桶是空的' : '这里还没有内容');
-    const emptyIcon = computed(() => currentList.value === 'trash' ? '⌫' : '✓');
+    const emptyText = computed(() => {
+      if (currentList.value === 'trash') return '垃圾桶是空的';
+      if (currentList.value === 'calendar') return '这一天没有日程或截止任务';
+      return '这里还没有内容';
+    });
+    const emptyIcon = computed(() => {
+      if (currentList.value === 'trash') return '⌫';
+      if (currentList.value === 'calendar') return '▦';
+      return '✓';
+    });
     const syncLabel = computed(() => {
       if (!sync.value.online) return '离线 · 本地可用';
       if (conflicts.value.length) return '需要处理冲突';
@@ -808,6 +994,9 @@ createApp({
           tasks.value = data.projects || [];
         } else if (currentList.value === 'logbook') {
           data = await api('/api/completed');
+          tasks.value = data.tasks || [];
+        } else if (currentList.value === 'calendar') {
+          data = await api('/api/tasks?list=all');
           tasks.value = data.tasks || [];
         } else if (currentList.value.startsWith('project:')) {
           const projectUuid = currentList.value.slice(8);
@@ -943,6 +1132,29 @@ createApp({
       fetchTasks();
     }
 
+    function selectCalendarDate(day) {
+      selectedCalendarDate.value = day.date;
+      calendarMonth.value = day.date.slice(0, 7);
+      clearSelection();
+    }
+
+    function changeCalendarMonth(offset) {
+      const cursor = dateFromKey(`${calendarMonth.value}-01`);
+      cursor.setMonth(cursor.getMonth() + offset);
+      calendarMonth.value = dateKey(cursor).slice(0, 7);
+      if (selectedCalendarDate.value.slice(0, 7) !== calendarMonth.value) {
+        selectedCalendarDate.value = dateKey(cursor);
+        clearSelection();
+      }
+    }
+
+    function showCalendarToday() {
+      const today = localDate();
+      selectedCalendarDate.value = today;
+      calendarMonth.value = today.slice(0, 7);
+      clearSelection();
+    }
+
     function loadDetail(task) {
       detail.title = task.title || '';
       detail.notes = task.notes || '';
@@ -959,7 +1171,10 @@ createApp({
     function openCreate(mode) {
       createMode.value = mode;
       Object.assign(createForm, emptyCreate());
-      if (currentList.value.startsWith('project:')) {
+      if (currentList.value === 'calendar' && mode === 'task') {
+        createForm.when = 'custom';
+        createForm.customDate = selectedCalendarDate.value;
+      } else if (currentList.value.startsWith('project:')) {
         createForm.project_uuid = currentList.value.slice(8);
         createForm.when = 'anytime';
       }
@@ -1093,10 +1308,10 @@ createApp({
       if (!task) return false;
       const date = task.scheduled_date || '';
       if (value === 'inbox') return task.st_code === 0;
-      if (value === 'today') return task.st_code !== 0 && date && date <= localDate();
+      if (value === 'today') return date === localDate();
       if (value === 'tomorrow') return date === localDate(1);
       if (value === 'anytime') return task.st_code === 1 && !date;
-      if (value === 'someday') return task.st_code === 2 && (!date || date > localDate());
+      if (value === 'someday') return task.st_code === 2 && !date;
       return false;
     }
 
@@ -1112,6 +1327,11 @@ createApp({
       } catch (error) {
         notify(error.message, false);
       }
+    }
+
+    async function moveScheduleToDate(value) {
+      if (!value || !selectedTask.value) return;
+      await moveSchedule(value);
     }
 
     async function moveParent(kind, value) {
@@ -1281,17 +1501,21 @@ createApp({
     return {
       auth, account, health, loading, creating, flushing,
       loginForm, remembered, manualLogin, loginError,
-      currentList, tasks, projects, areas, tags, stats, sync, conflicts,
+      currentList, calendarMonth, selectedCalendarDate, calendarWeekdays,
+      tasks, projects, areas, tags, stats, sync, conflicts,
       selectedUuid, selectedTask, searchKeyword, pinned, showCreate, createMode,
       showSync, toast, lightbox, createForm, detail,
       sidebar, activeProjects, projectOptions, currentTitle, currentSubtitle,
+      calendarDays, calendarMonthLabel, calendarSelectedLabel, selectedCalendarCounts,
       displayTasks, emptyText, emptyIcon, syncLabel, createTagList, detailTagList,
       noteImages, scheduleOptions,
       login, loginRemembered, forgetAccount, logout, refreshData, fetchTasks,
-      switchList, switchProject, switchTag, selectTask, clearSelection,
+      switchList, switchProject, switchTag, selectCalendarDate, changeCalendarMonth,
+      showCalendarToday, selectTask, clearSelection,
       openCreate, createItem, toggleCreateTag, toggleDetailTag,
       saveDetail, saveNotes, saveTags, saveDeadline, clearDeadline, saveAllDetail,
-      scheduleMatches, moveSchedule, moveParent, setStatus, cycleStatus, trashTask,
+      scheduleMatches, moveSchedule, moveScheduleToDate, moveParent,
+      setStatus, cycleStatus, trashTask,
       flushSync, resolveConflict, togglePin, isPinned, isOverdue, notePreview,
       attachmentUrl, uploadAttachment, onNotePaste,
     };

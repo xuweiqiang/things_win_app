@@ -1081,47 +1081,42 @@ def filter_tasks(tasks: list[dict], *, only_pending: bool = True,
     """
     按 Things 的真实列表逻辑过滤:
       - inbox:    st=0 (无任何调度)
-      - today:    st=1/2 且 sr ≤ 今天 (含过期任务)
-      - anytime:  st=1 且 (sr 为空 或 sr > 今天)
-      - someday:  st=2 且 sr > 今天
-      - upcoming: 同 someday
+      - today:    st=1 且 scheduled_date 精确等于今天
+      - anytime:  st=1 且没有 scheduled_date
+      - someday:  st=2 且没有 scheduled_date
+      - upcoming: st=2 且 scheduled_date 晚于今天
       - trash:    trashed=True
       - all:      不过滤
       - tag_filter: 额外按标签名过滤 (大小写敏感, 精确匹配)
     """
-    from datetime import datetime as _dt, timezone as _tz
+    from datetime import datetime as _dt
 
-    # 今天的本地日期 (不含时分秒)
-    now_local = _dt.now()
-    today_midnight = _dt(now_local.year, now_local.month, now_local.day)
-    today_ts = int(today_midnight.timestamp())   # 秒级 (Things Cloud 用秒)
-    today_date = now_local.date()                # v2.5.13: 日期对日期比较用
+    today_date = _dt.now().date()
 
-    def _is_today_or_overdue(sr_ms_or_s):
-        """判断一个任务的 sr (秒或毫秒) 的日期是否 <= 今天
-        v2.5.13: 按"日期对日期"比较 — 官方客户端把日期存为 UTC 零点 (北京时间早上8点),
-        旧版 PC 存本地零点; 若用时间戳对比本地零点, 手机排的"今天"任务会被误判为未来。
+    def _scheduled_date(task: dict):
+        """Return a task's local scheduled date.
+
+        Things Cloud keeps historical ``sr`` values after a task has moved on
+        from a dated list. Treating every past ``sr`` as Today keeps years-old
+        items in the list. The bundled Go SDK instead queries an exact day
+        window, so compare the already-formatted local date here.
         """
-        if not sr_ms_or_s:
-            return False
+        value = task.get("scheduled_date")
+        if isinstance(value, str) and value:
+            try:
+                return _dt.strptime(value, "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        raw = task.get("scheduled_ms")
+        if not raw:
+            return None
         try:
-            v = float(sr_ms_or_s)
+            v = float(raw)
             if v > 1e12:
                 v = v / 1000.0
-            return _dt.fromtimestamp(v).date() <= today_date
+            return _dt.fromtimestamp(v).date()
         except Exception:
-            return False
-
-    def _is_scheduled_future(sr_ms_or_s):
-        if not sr_ms_or_s:
-            return False
-        try:
-            v = float(sr_ms_or_s)
-            if v > 1e12:
-                v = v / 1000.0
-            return _dt.fromtimestamp(v).date() > today_date
-        except Exception:
-            return False
+            return None
 
     result = []
     for t in tasks:
@@ -1137,7 +1132,7 @@ def filter_tasks(tasks: list[dict], *, only_pending: bool = True,
 
         if list_name:
             st = t.get("st_code", 0)
-            sr = t.get("scheduled_ms")
+            scheduled_date = _scheduled_date(t)
 
             if list_name == "all":
                 pass
@@ -1146,23 +1141,22 @@ def filter_tasks(tasks: list[dict], *, only_pending: bool = True,
                 if st != 0:
                     continue
             elif list_name == "today":
-                # Things Today = st=1/2 AND sr ≤ 今天 (含过期)
-                if not _is_today_or_overdue(sr):
+                # Match the Go SDK's Today query exactly. Old raw sr values do
+                # not remain in Today after the task has left that date.
+                if st != 1 or scheduled_date != today_date:
                     continue
             elif list_name == "anytime":
-                # Anytime = st=1 AND (sr 为空 OR sr > 今天)
-                if st != 1:
+                if st != 1 or scheduled_date is not None:
                     continue
-                if sr and _is_today_or_overdue(sr):
-                    continue  # 已经进今天了
             elif list_name == "someday":
-                # Someday includes undated items and future scheduled items.
-                if st != 2:
-                    continue
-                if sr and not _is_scheduled_future(sr):
+                if st != 2 or scheduled_date is not None:
                     continue
             elif list_name == "upcoming":
-                if st != 2 or not _is_scheduled_future(sr):
+                if (
+                    st != 2
+                    or scheduled_date is None
+                    or scheduled_date <= today_date
+                ):
                     continue
             elif list_name == "all_scheduled":
                 pass
@@ -1177,12 +1171,6 @@ def filter_tasks(tasks: list[dict], *, only_pending: bool = True,
             elif list_name == "trash":
                 # Trash = trashed=True (无论 st 是什么)
                 if not t.get("trashed"):
-                    continue
-            elif list_name == "anytime":
-                # Anytime 独立列表: st=1 且 (sr 为空 或 sr > 今天)
-                if st != 1:
-                    continue
-                if sr and _is_today_or_overdue(sr):
                     continue
             else:
                 if t["schedule"] != list_name:

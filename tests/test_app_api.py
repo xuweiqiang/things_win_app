@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 from contextlib import contextmanager
+from datetime import date, timedelta
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -12,6 +13,7 @@ import pytest
 import app
 from sync_engine import SafeThings
 from tests.test_sync_engine import FakeCloud, make_engine, seed_task
+from things_cloud import ST_ANYTIME, _date_to_ts
 
 
 @contextmanager
@@ -103,6 +105,34 @@ def test_non_login_api_endpoints(api_engine):
             status, payload = request_json(base, path)
             assert status == 200, path
             assert key in payload, path
+
+
+def test_today_api_does_not_include_old_scheduled_dates(api_engine):
+    engine, cloud = api_engine
+    today = date.today()
+    seed_task(
+        cloud,
+        "Today only",
+        st=ST_ANYTIME,
+        sr=_date_to_ts(today.isoformat()),
+    )
+    seed_task(
+        cloud,
+        "Stale scheduled value",
+        st=ST_ANYTIME,
+        sr=_date_to_ts((today - timedelta(days=1200)).isoformat()),
+    )
+    seed_task(
+        cloud,
+        "Future date",
+        st=ST_ANYTIME,
+        sr=_date_to_ts((today + timedelta(days=10)).isoformat()),
+    )
+    with running_server() as base:
+        status, payload = request_json(base, "/api/tasks?list=today")
+
+    assert status == 200
+    assert [task["title"] for task in payload["tasks"]] == ["Today only"]
 
 
 def test_write_api_paths(api_engine):
