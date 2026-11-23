@@ -30,55 +30,48 @@ API_ENDPOINT = "https://cloud.culturedcode.com"
 # =====================================================================
 # Things Cloud 兼容身份
 #
-# 社区实现的 Task7 写入格式已验证与旧版 Things 客户端模型兼容。这里上报
-# iPhone Things 3.22.8 的身份和 schema，避免云端把本客户端识别成未知的
-# 新平台版本。它不表示本项目获得 Cultured Code 背书，也不保证在所有
-# iOS / Things 版本上都不会出现兼容问题。
-#
-# 兼容基准:
-#   PHONE_VERSION_CEILING = "32208"   5位编码: 主(1) + 次(2) + 补丁(2)
-#   PHONE_SCHEMA_CEILING  = "301"     Actions 3.22.x 使用的 schema
-#
-# _enforce_version_guard() 在导入时防止上报值超过兼容基准。
+# Task7 的完整创建与修改规则、原始 history 预检和请求头以
+# arthursoares/things-cloud-sdk 的 Mac 客户端抓包为兼容基准。上报 Mac
+# 身份是因为社区 SDK 已在该身份下验证 Task7，而不是声称本程序是官方
+# macOS 客户端。它不表示 Cultured Code 的关联、支持或授权。
 # =====================================================================
 
-PHONE_VERSION_CEILING = "32208"   # 手机端版本编码上限 (永久基准)
-PHONE_SCHEMA_CEILING = "301"      # 手机端 schema 上限 (永久基准)
+COMPAT_VERSION_CEILING = "32209501"
+COMPAT_SCHEMA_CEILING = "301"
 
-# 上报候选值 (超过基准会被护栏自动压回)
-THINGS_VERSION_CODE = "32208"           # iPhone Things 3.22.8 (5位编码)
-SCHEMA_HEADER = "301"                   # 服务端 latest-schema-version=301
+THINGS_VERSION_CODE = COMPAT_VERSION_CEILING
+SCHEMA_HEADER = COMPAT_SCHEMA_CEILING
 
 
 def _enforce_version_guard():
-    """import 时强制钳制: 任何超过手机端基准的配置自动压回 + 记日志。"""
+    """Keep the reported compatibility identity within the verified baseline."""
     global THINGS_VERSION_CODE, SCHEMA_HEADER
     try:
-        if int(THINGS_VERSION_CODE) > int(PHONE_VERSION_CEILING):
+        if int(THINGS_VERSION_CODE) > int(COMPAT_VERSION_CEILING):
             _log.warning(
-                "版本护栏: THINGS_VERSION_CODE=%s 超过手机端基准 %s, 已自动压回",
-                THINGS_VERSION_CODE, PHONE_VERSION_CEILING,
+                "版本护栏: THINGS_VERSION_CODE=%s 超过兼容基准 %s, 已自动压回",
+                THINGS_VERSION_CODE, COMPAT_VERSION_CEILING,
             )
-            THINGS_VERSION_CODE = PHONE_VERSION_CEILING
-        if int(SCHEMA_HEADER) > int(PHONE_SCHEMA_CEILING):
+            THINGS_VERSION_CODE = COMPAT_VERSION_CEILING
+        if int(SCHEMA_HEADER) > int(COMPAT_SCHEMA_CEILING):
             _log.warning(
-                "版本护栏: SCHEMA_HEADER=%s 超过手机端基准 %s, 已自动压回",
-                SCHEMA_HEADER, PHONE_SCHEMA_CEILING,
+                "版本护栏: SCHEMA_HEADER=%s 超过兼容基准 %s, 已自动压回",
+                SCHEMA_HEADER, COMPAT_SCHEMA_CEILING,
             )
-            SCHEMA_HEADER = PHONE_SCHEMA_CEILING
+            SCHEMA_HEADER = COMPAT_SCHEMA_CEILING
     except ValueError:
         _log.warning(
-            "版本护栏: 版本值非法 (%r / %r), 重置为手机端基准",
+            "版本护栏: 版本值非法 (%r / %r), 重置为兼容基准",
             THINGS_VERSION_CODE, SCHEMA_HEADER,
         )
-        THINGS_VERSION_CODE = PHONE_VERSION_CEILING
-        SCHEMA_HEADER = PHONE_SCHEMA_CEILING
+        THINGS_VERSION_CODE = COMPAT_VERSION_CEILING
+        SCHEMA_HEADER = COMPAT_SCHEMA_CEILING
 
 
 _enforce_version_guard()
 
-THINGS_USER_AGENT = f"ThingsiPhone/{THINGS_VERSION_CODE}"   # ThingsiPhone/32208
-THINGS_APP_ID = "com.culturedcode.ThingsiPhone"
+THINGS_USER_AGENT = f"ThingsMac/{THINGS_VERSION_CODE}"
+THINGS_APP_ID = "com.culturedcode.ThingsMac"
 THINGS_APP_INSTANCE_ID = (
     "000000000000000000000000000000000000000000000000000000000000000-"
     f"{THINGS_APP_ID}-"
@@ -248,18 +241,18 @@ class ThingsConflictError(ThingsCloudError):
 class ThingsClient:
     """Things Cloud HTTP 客户端。"""
 
-    # 为兼容 Things Cloud 的客户端版本协商，上报社区实现使用的稳定基准。
+    # Match the Mac identity exercised by the community SDK's Task7 tests.
     CLIENT_INFO = {
-        "dm": "iPhone14,2",           # iPhone 13 Pro (常见设备型号)
-        "lr": "CN",
+        "dm": "MacBookPro18,3",
+        "lr": "US",
         "nf": True,
         "nk": True,
-        "nn": "ThingsiPhone",
-        "nv": THINGS_VERSION_CODE,    # "32208" — 5位编码 3.22.8 (与手机一致)
-        "on": "iOS",
-        "ov": "16.2",                  # 精确匹配你的 iPhone iOS 版本
-        "pl": "zh-CN",
-        "ul": "zh-Hans-CN",
+        "nn": "ThingsMac",
+        "nv": THINGS_VERSION_CODE,
+        "on": "macOS",
+        "ov": "15.7.3",
+        "pl": "en-US",
+        "ul": "en-Latn-US",
     }
 
     def __init__(self, email: str, password: str, endpoint: str = API_ENDPOINT):
@@ -390,7 +383,7 @@ class ThingsClient:
         """
         extra = {
             "Schema": SCHEMA_HEADER,
-            "Push-Priority": "10",
+            "Push-Priority": "5",
             "App-Instance-Id": THINGS_APP_INSTANCE_ID,
             "App-Id": THINGS_APP_ID,
         }
@@ -402,7 +395,7 @@ class ThingsClient:
             f"/version/1/history/{history_key}/commit",
             body=body,
             extra_headers=extra,
-            params={"ancestor-index": ancestor_index, "_cnt": len(items)},
+            params={"ancestor-index": ancestor_index, "_cnt": 1},
         )
         if resp.status_code == 200:
             return resp.json().get("server-head-index", ancestor_index)
@@ -429,57 +422,12 @@ class ThingsClient:
 
     def commit(self, history_key: str, items: list[dict], ancestor_index: int) -> int:
         """
-        向 history 提交一次 commit。
+        向 history 提交一次 commit；遇到 409 时绝不静默覆盖远端修改。
+
         items: [{uuid: "...", "e": "Task6", "t": 0, "p": {...}}, ...]
         返回新的 server-head-index。
-
-        自动处理 Things Cloud 冲突 (HTTP 409)：
-        - 手机/iPad 同时做了修改时，ancestor_index 过期
-        - 后端返回新的 latest-server-index → 重新 commit
-        - 最多重试 5 次，避免无限循环
         """
-        extra = {
-            "Schema": SCHEMA_HEADER,
-            "Push-Priority": "10",          # Rust things3-cloud 用 10
-            "App-Instance-Id": THINGS_APP_INSTANCE_ID,
-            "App-Id": THINGS_APP_ID,
-        }
-        body = {it["uuid"]: {"e": it["e"], "t": it["t"], "p": it["p"]} for it in items}
-
-        _log.info(f"[commit] ancestor={ancestor_index} items={len(items)} schema={SCHEMA_HEADER} appid={THINGS_APP_ID}")
-
-        for attempt in range(5):
-            resp = self._post(
-                f"/version/1/history/{history_key}/commit",
-                body=body,
-                extra_headers=extra,
-                params={"ancestor-index": ancestor_index, "_cnt": len(items)},
-            )
-            _log.info(f"[commit] attempt={attempt+1} HTTP={resp.status_code}")
-            if resp.status_code == 200:
-                new_head = resp.json().get("server-head-index", ancestor_index)
-                _log.info(f"[commit] ✅ 成功 new_head={new_head}")
-                return new_head
-            if resp.status_code == 409:
-                _log.info(f"[commit] ⚠️ 409 冲突 — 重试")
-                try:
-                    data = resp.json()
-                    new_ancestor = data.get("latest-server-index")
-                    _log.info(f"[commit]   server 建议 ancestor={new_ancestor}")
-                    if new_ancestor and new_ancestor > ancestor_index:
-                        ancestor_index = new_ancestor
-                        continue
-                except Exception:
-                    pass
-                head = self.get_history_head(history_key)
-                ancestor_index = head.get("latest-server-index", ancestor_index + 1)
-                _log.info(f"[commit]   从 head 获取 ancestor={ancestor_index}")
-                continue
-            _log.info(f"[commit] ❌ HTTP {resp.status_code}: {resp.text[:300]}")
-            raise ThingsCloudError(
-                f"Commit 失败: HTTP {resp.status_code} {resp.text[:300]}"
-            )
-        raise ThingsCloudError("Commit 重试 5 次后仍然冲突，请稍后再试")
+        return self.commit_once(history_key, items, ancestor_index)
 
 
 # ============================================================

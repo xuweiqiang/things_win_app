@@ -347,6 +347,102 @@ def _raw_task_state(items: list[dict]) -> dict[str, dict]:
     return state
 
 
+def _task_target_state(items: list[dict], target_uuid: str) -> dict:
+    """Classify a server-confirmed task before a sparse Task7 modification.
+
+    The public task projection does not prove whether recurrence fields existed
+    on the raw history. Mirror the Go SDK's raw-history preflight so an
+    incomplete or ambiguous target is never modified.
+    """
+    state = {
+        "affected": False,
+        "exists": False,
+        "ambiguous": False,
+        "future": False,
+        "latest_kind": "",
+        "complete": False,
+        "recurring": False,
+    }
+    rr_known = rp_known = rt_known = False
+    rr_active = rp_active = rt_active = False
+    icsd = acrd = False
+    affected_indexes: dict[int, int] = {}
+
+    for position, item in enumerate(items):
+        if item.get("uuid") != target_uuid:
+            continue
+        kind = str(item.get("e") or "")
+        if not kind.startswith("Task"):
+            continue
+
+        state["affected"] = True
+        index = item.get("server_index", position)
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            state["ambiguous"] = True
+            index = position
+        affected_indexes[index] = affected_indexes.get(index, 0) + 1
+
+        if kind not in ("Task6", "Task7"):
+            state["future"] = True
+            state["ambiguous"] = True
+            continue
+
+        action = item.get("t")
+        if action == ACTION_CREATED:
+            if state["exists"]:
+                state["ambiguous"] = True
+            state["exists"] = True
+            state["latest_kind"] = kind
+            rr_known = rp_known = rt_known = False
+            rr_active = rp_active = rt_active = False
+            icsd = acrd = False
+        elif action == ACTION_MODIFIED:
+            if not state["exists"]:
+                state["ambiguous"] = True
+            state["latest_kind"] = kind
+        elif action == 2:
+            state["exists"] = False
+            rr_known = rp_known = rt_known = False
+            rr_active = rp_active = rt_active = False
+            icsd = acrd = False
+            continue
+        else:
+            state["ambiguous"] = True
+            continue
+
+        payload = item.get("p")
+        if not isinstance(payload, dict):
+            state["ambiguous"] = True
+            continue
+        if "rr" in payload:
+            rr_known = True
+            rr_active = payload["rr"] is not None
+        if "rp" in payload:
+            rp_known = True
+            rp_active = payload["rp"] is not None
+        if "rt" in payload:
+            rt_known = True
+            rt_value = payload["rt"]
+            if rt_value is None:
+                rt_active = False
+            elif isinstance(rt_value, list):
+                rt_active = bool(rt_value)
+            else:
+                state["ambiguous"] = True
+        if "icsd" in payload:
+            icsd = payload["icsd"] is not None
+        if "acrd" in payload:
+            acrd = payload["acrd"] is not None
+
+    if any(count > 1 for count in affected_indexes.values()):
+        state["ambiguous"] = True
+    state["complete"] = rr_known and rp_known and rt_known
+    state["recurring"] = rr_active or rp_active or rt_active or icsd or acrd
+    return state
+
+
 def _raw_meta_state(items: list[dict], kind: str) -> dict[str, dict]:
     state: dict[str, dict] = {}
     for item in items:
@@ -564,7 +660,20 @@ class SafeThings:
             return copy.deepcopy(remote["p"])
         return current
 
-    def _modify_entity_kind(self, current: dict, action: str) -> str:
+    def _modify_entity_kind(
+        self, task_uuid: str, current: dict, action: str
+    ) -> str:
+        raw_target = _task_target_state(self._raw_items, task_uuid)
+        if raw_target["affected"]:
+            if (
+                not raw_target["exists"]
+                or raw_target["ambiguous"]
+                or raw_target["future"]
+            ):
+                raise SyncError("任务历史状态不明确，安全写入已拒绝修改")
+            if raw_target["recurring"]:
+                raise SyncError("这是重复任务或重复实例，安全写入已拒绝修改")
+
         payload = current.get("p", {})
         repeating = (
             payload.get("rr") is not None
@@ -577,13 +686,62 @@ class SafeThings:
             raise SyncError("这是重复任务或重复实例，安全写入已拒绝修改")
         if action == "cancel":
             return "Task6"
-        if current.get("kind") == "Task7" and all(
-            key in payload for key in ("rr", "rp", "rt")
+        if raw_target["affected"] and raw_target["complete"]:
+            return "Task7"
+        if raw_target["affected"] and raw_target["latest_kind"] == "Task7":
+            raise SyncError("任务缺少完整重复字段，安全写入已拒绝修改")
+        if (
+            not raw_target["affected"]
+            and current.get("kind") == "Task7"
+            and all(key in payload for key in ("rr", "rp", "rt"))
         ):
             return "Task7"
         # Legacy records and sparse Task6 histories keep the envelope that the
         # existing account already uses. This preserves native compatibility.
         return "Task6"
+
+    def _validate_task_operation_target(
+        self, operation: dict, raw_items: list[dict]
+    ) -> None:
+        """Re-check raw remote state immediately before a queued POST."""
+        if operation.get("action") == "create":
+            return
+        task_uuid = str(operation.get("uuid") or "")
+        outgoing = next(
+            (
+                item
+                for item in (operation.get("items") or [])
+                if item.get("uuid") == task_uuid
+            ),
+            None,
+        )
+        if not outgoing:
+            raise SyncError("待提交操作缺少目标任务")
+        raw_target = _task_target_state(raw_items, task_uuid)
+        if not raw_target["affected"]:
+            raise SyncError("任务不在已确认的远端历史中，安全写入已拒绝修改")
+        if (
+            not raw_target["exists"]
+            or raw_target["ambiguous"]
+            or raw_target["future"]
+        ):
+            raise SyncError("任务远端历史状态不明确，安全写入已拒绝修改")
+        if raw_target["recurring"]:
+            raise SyncError("这是重复任务或重复实例，安全写入已拒绝修改")
+
+        outgoing_kind = str(outgoing.get("e") or "")
+        if raw_target["complete"]:
+            cancel_with_task6 = (
+                outgoing_kind == "Task6"
+                and outgoing.get("p", {}).get("ss") == SS_CANCELED
+            )
+            if outgoing_kind != "Task7" and not cancel_with_task6:
+                raise SyncError("任务远端类型已变化，安全写入已拒绝修改")
+        else:
+            if raw_target["latest_kind"] == "Task7":
+                raise SyncError("任务缺少完整重复字段，安全写入已拒绝修改")
+            if outgoing_kind != "Task6":
+                raise SyncError("任务远端类型已变化，安全写入已拒绝修改")
 
     def _tag_ids_for_names(self, names: list[str] | None) -> tuple[list[str], list[dict]]:
         tag_state = _raw_meta_state(
@@ -841,6 +999,17 @@ class SafeThings:
                     self._online = True
                     self._last_error = ""
 
+                    try:
+                        self._validate_task_operation_target(
+                            operation, self._raw_items
+                        )
+                    except SyncError as exc:
+                        self._add_conflict(operation, str(exc))
+                        self._remove_outbox_operation(operation)
+                        self._persist()
+                        self._rebuild_projection()
+                        break
+
                     # Pull before retrying an offline write. Selecting a fresh
                     # ancestor without examining new history would silently
                     # overwrite a same-field edit made on another device.
@@ -1067,7 +1236,9 @@ class SafeThings:
                 return {"ok": False, "changed": []}
             current = self._current_payload(task_uuid)
             current_state = self._task_state().get(task_uuid) or {}
-            entity_kind = self._modify_entity_kind(current_state, "modify")
+            entity_kind = self._modify_entity_kind(
+                task_uuid, current_state, "modify"
+            )
             base_payload = self._base_payload(task_uuid, current)
             payload: dict = {"md": _things_now()}
             base_fields: dict = {}
@@ -1188,14 +1359,18 @@ class SafeThings:
             status = str(status or "").lower().strip()
             if status == "pending":
                 payload = {"ss": SS_PENDING, "sp": None, "md": now}
-                kind = self._modify_entity_kind(current_state, "status")
+                kind = self._modify_entity_kind(
+                    task_uuid, current_state, "status"
+                )
                 base_fields = {
                     "ss": base_payload.get("ss", 0),
                     "sp": base_payload.get("sp"),
                 }
             elif status == "completed":
                 payload = {"ss": SS_COMPLETED, "sp": now, "md": now}
-                kind = self._modify_entity_kind(current_state, "status")
+                kind = self._modify_entity_kind(
+                    task_uuid, current_state, "status"
+                )
                 base_fields = {
                     "ss": base_payload.get("ss", 0),
                     "sp": base_payload.get("sp"),
@@ -1204,7 +1379,9 @@ class SafeThings:
                 # The verified Task7 patch scope only covers pending/completed.
                 # Task6 cancellation is retained for compatibility.
                 payload = {"ss": SS_CANCELED, "sp": now, "md": now}
-                kind = self._modify_entity_kind(current_state, "cancel")
+                kind = self._modify_entity_kind(
+                    task_uuid, current_state, "cancel"
+                )
                 base_fields = {
                     "ss": base_payload.get("ss", 0),
                     "sp": base_payload.get("sp"),
@@ -1233,7 +1410,9 @@ class SafeThings:
             current = self._current_payload(task_uuid)
             current_state = self._task_state().get(task_uuid) or {}
             base_payload = self._base_payload(task_uuid, current)
-            kind = self._modify_entity_kind(current_state, "trash")
+            kind = self._modify_entity_kind(
+                task_uuid, current_state, "trash"
+            )
             payload = {"tr": bool(trashed), "md": _things_now()}
             self._queue_operation(
                 action="trash" if trashed else "restore",
@@ -1275,7 +1454,9 @@ class SafeThings:
             current = self._current_payload(task_uuid)
             current_state = self._task_state().get(task_uuid) or {}
             base_payload = self._base_payload(task_uuid, current)
-            kind = self._modify_entity_kind(current_state, "schedule")
+            kind = self._modify_entity_kind(
+                task_uuid, current_state, "schedule"
+            )
             target_text = str(target or "").lower().strip()
             if target_text in ("inbox", ""):
                 st, sr = ST_INBOX, None
@@ -1351,7 +1532,9 @@ class SafeThings:
                 current = self._current_payload(task["uuid"])
                 current_state = self._task_state().get(task["uuid"]) or {}
                 base_payload = self._base_payload(task["uuid"], current)
-                kind = self._modify_entity_kind(current_state, "reorder")
+                kind = self._modify_entity_kind(
+                    task["uuid"], current_state, "reorder"
+                )
                 payload = {"ix": new_index, "md": now}
                 self._queue_operation(
                     action="reorder",

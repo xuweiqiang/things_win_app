@@ -591,6 +591,7 @@ def test_project_edit_and_area_movement(tmp_path):
             "tt": "Renamed project",
             "nt": "Project notes",
             "dd": "2031-06-07",
+            "tg": ["project-tag"],
             "area_uuid": second_area,
         },
     )
@@ -600,8 +601,86 @@ def test_project_edit_and_area_movement(tmp_path):
     assert project["title"] == "Renamed project"
     assert project["notes"] == "Project notes"
     assert project["deadline_date"] == "2031-06-07"
+    assert project["tags"] == ["project-tag"]
     assert project["area_name"] == "Second area"
     assert cloud.commits[-1]["items"][-1]["e"] == "Task7"
+
+
+def test_sparse_task7_target_is_rejected_before_commit(tmp_path):
+    cloud = FakeCloud()
+    task_uuid = new_uuid()
+    cloud.external_commit(
+        [
+            {
+                "uuid": task_uuid,
+                "e": "Task7",
+                "t": ACTION_CREATED,
+                "p": {"tt": "Sparse", "st": 0, "ss": 0},
+            }
+        ]
+    )
+    engine = make_engine(cloud, tmp_path)
+    commits_before = len(cloud.commits)
+
+    with pytest.raises(SyncError, match="缺少完整重复字段"):
+        engine.modify_task_fields(task_uuid, {"tt": "Unsafe"})
+    assert len(cloud.commits) == commits_before
+
+
+def test_ambiguous_task7_history_is_rejected_before_commit(tmp_path):
+    cloud = FakeCloud()
+    task_uuid = new_uuid()
+    cloud.external_commit(
+        [
+            {
+                "uuid": task_uuid,
+                "e": "Task7",
+                "t": ACTION_CREATED,
+                "p": task_payload("Ambiguous"),
+            },
+            {
+                "uuid": task_uuid,
+                "e": "Task7",
+                "t": ACTION_MODIFIED,
+                "p": {"tt": "Same index", "md": 1_770_000_100},
+            },
+        ]
+    )
+    engine = make_engine(cloud, tmp_path)
+    commits_before = len(cloud.commits)
+
+    with pytest.raises(SyncError, match="历史状态不明确"):
+        engine.modify_task_fields(task_uuid, {"tt": "Unsafe"})
+    assert len(cloud.commits) == commits_before
+
+
+def test_offline_write_rechecks_remote_history_before_commit(tmp_path):
+    cloud = FakeCloud()
+    task_uuid = seed_task(cloud, "Remote task")
+    engine = make_engine(cloud, tmp_path)
+
+    cloud.offline = True
+    engine.modify_task_fields(task_uuid, {"tt": "Queued offline"})
+    assert len(engine._outbox) == 1
+
+    cloud.offline = False
+    duplicate = {
+        "uuid": task_uuid,
+        "e": "Task7",
+        "t": ACTION_MODIFIED,
+        "p": {"tt": "Conflicting remote history"},
+        "server_index": cloud.head,
+    }
+    cloud.items.extend([copy.deepcopy(duplicate), copy.deepcopy(duplicate)])
+    cloud.head += 1
+    commits_before = len(cloud.commits)
+
+    status = engine.flush()
+
+    assert len(cloud.commits) == commits_before
+    assert status["pending"] == 0
+    assert status["conflicts"] == 1
+    assert "历史状态不明确" in engine.get_conflicts()[0]["reason"]
 
 
 def test_task_moves_between_project_and_area(tmp_path):

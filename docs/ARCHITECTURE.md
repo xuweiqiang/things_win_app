@@ -64,17 +64,21 @@ community SDK. Validation happens before any POST:
 - Relationship arrays contain valid UUIDs.
 - A task cannot belong to both a project and an area.
 
-Projects, headings and repeated tasks are not created by the Windows UI.
-Offline edits remain separate modified operations and never rewrite an already
-queued canonical create into a partial object.
+Tasks and projects are created through the Windows UI with the same canonical
+Task7 payload. Headings and repeated tasks are not created by the UI. Offline
+edits remain separate modified operations and never rewrite an already queued
+canonical create into a partial object.
 
 ## Durable Offline Writes
 
-Each history key has two JSON files under `%APPDATA%\ThingsWindows\`:
+Each history key has a directory under
+`%APPDATA%\ThingsWindows\accounts\<history-hash>\`:
 
-- A cache containing the last known remote items and head index.
-- An ordered outbox containing pending operations, local timestamps and
-  conflict metadata.
+- `history_items.json` and `known_head.json` contain the last confirmed remote
+  state.
+- `outbox.json` contains pending operations, local timestamps and conflict
+  metadata.
+- `conflicts.json` and `sync_state.json` persist conflict and sync status.
 
 Writes update the local projection and atomically persist the outbox before
 returning to the UI. A successful Cloud commit persists the new head and cache,
@@ -114,9 +118,13 @@ status transitions use Task6 where required.
 
 ## Compatibility Identity
 
-The HTTP client reports a stable Things iPhone 3.22.8 identity and schema used
-by the community protocol. This preserves Cloud version negotiation for older
-iOS clients and avoids presenting an unknown platform/version pair.
+The HTTP client reports `ThingsMac/32209501`,
+`com.culturedcode.ThingsMac`, schema `301`, commit count `_cnt=1` and push
+priority `5`, matching the Mac identity exercised by the community
+`arthursoares/things-cloud-sdk`. Before every non-create commit, the engine
+rechecks the freshly pulled raw history for task existence, ambiguous duplicate
+buckets, future Task entity types, incomplete Task7 recurrence fields and
+recurring task instances.
 
 This is a compatibility mechanism, not affiliation or a guarantee. Different
 Things versions, server-side protocol changes, Apple account challenges and

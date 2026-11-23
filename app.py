@@ -279,12 +279,8 @@ class Handler(BaseHTTPRequestHandler):
                         "unofficial": True,
                         "project_url": PROJECT_URL,
                         "authenticated": info["authenticated"],
-                        "phone_things_version": (
-                            f"{version_code[0]}."
-                            f"{version_code[1:3]}."
-                            f"{int(version_code[3:])}"
-                        ),
-                        "phone_things_platform": "iOS",
+                        "compatibility_version_code": version_code,
+                        "compatibility_platform": "macOS",
                     }
                 )
                 return

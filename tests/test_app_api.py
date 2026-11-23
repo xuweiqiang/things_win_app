@@ -77,6 +77,8 @@ def test_non_login_api_endpoints(api_engine):
         assert health["ok"] is True
         assert health["unofficial"] is True
         assert health["authenticated"] is True
+        assert health["compatibility_version_code"] == app.THINGS_VERSION_CODE
+        assert health["compatibility_platform"] == "macOS"
 
         status, tasks = request_json(base, "/api/tasks/all")
         assert status == 200

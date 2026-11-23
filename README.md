@@ -27,7 +27,7 @@ Cloud，使 Windows 与 macOS、iPhone、iPad 上的 Things 共享任务数据�
 因此，以下内容属于兼容性设计而非已经证明的互操作承诺：
 
 - 本客户端按社区 Go SDK 的 Task7 规则生成完整创建报文。
-- 客户端向 Cloud 上报兼容的 Things iPhone 身份与 schema。
+- 客户端使用社区 SDK 已验证的 `ThingsMac/32209501` 兼容身份与 schema。
 - 成功后同一 history 中的 macOS/iOS 客户端应能看到 Windows 修改。
 
 尚未用真实账号验证的场景包括已有账号登录、Apple 账号安全提示、两步验证、
@@ -103,14 +103,17 @@ python -m pytest -q
 
 ## 数据位置
 
-运行时数据默认位于 `%APPDATA%\ThingsWindows\`：
+应用级数据位于 `%APPDATA%\ThingsWindows\`，每个 Cloud history 的缓存位于
+`%APPDATA%\ThingsWindows\accounts\<history-hash>\`：
 
-- `cache-*.json`：本地 Cloud 状态缓存。
-- `outbox-*.json`：等待提交的写操作。
-- `conflicts-*.json`：持久化冲突记录。
-- `credentials.dat`：DPAPI 加密的账号凭证。
-- `pins.json`：界面置顶项。
-- `attachments\`：本机附件。
+- `history_items.json`：本地 Cloud 状态缓存。
+- `known_head.json`：已确认的远端 head。
+- `outbox.json`：等待提交的写操作。
+- `conflicts.json`：持久化冲突记录。
+- `sync_state.json`：最近同步状态。
+- `credentials.dat`：DPAPI 加密的账号凭证，位于应用级目录。
+- `pins.json`：界面置顶项，位于应用级目录。
+- `attachments\`：本机附件，位于应用级目录。
 
 日志写入 EXE/源码目录下的 `things_debug.log`，该文件已被 Git 忽略。
 
